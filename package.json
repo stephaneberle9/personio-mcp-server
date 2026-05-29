@@ -23,6 +23,7 @@
     "watch": "tsc --watch",
     "inspector": "npx @modelcontextprotocol/inspector build/index.js",
     "start": "node build/index.js",
+    "attributes": "node print-attributes.mjs",
     "test": "node test-smoke.mjs"
   },
   "dependencies": {
