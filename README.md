@@ -66,6 +66,10 @@ Set the following environment variables:
 
 - `PERSONIO_CLIENT_ID`: Your Personio API client ID
 - `PERSONIO_CLIENT_SECRET`: Your Personio API client secret
+- `PERSONIO_DYNAMIC_FIELD_MAP` *(optional)*: JSON object mapping Personio
+  `dynamic_<id>` custom-field keys to readable names, e.g.
+  `{"dynamic_14285869":"shoe_size"}`. Merged on top of the built-in defaults.
+  See [Retrieving additional attributes](#retrieving-additional-attributes).
 
 You can set these in a `.env` file in the project root:
 
@@ -154,7 +158,10 @@ Claude will use the appropriate Personio MCP tools to fulfill your requests and 
 ### Employee Tools
 
 - `get_employee`: Get detailed information about a specific employee by ID
-  - Returns: id, name, email, position, department, **office/location**, status, hire_date, weekly_hours, shoe_size
+  - Returns the friendly core fields (id, name, email, position, department,
+    **office/location**, status, hire_date, weekly_hours) **plus every other
+    attribute the API credential's scope permits**. See
+    [Retrieving additional attributes](#retrieving-additional-attributes).
 
 - `list_employees`: Get a list of all employees with optional filtering and export formats
   - **Parameters:**
@@ -181,6 +188,62 @@ list_employees({ limit: 100, format: "csv" })
 // Get employees from a specific office as CSV
 list_employees({ office: "Berlin", format: "csv" })
 ```
+
+### Retrieving additional attributes
+
+Beyond the friendly core fields, `get_employee` and `list_employees` return
+**any attribute the Personio API credential's scope permits**. There is no
+hardcoded whitelist — the set of fields you get back depends entirely on the
+credential's *readable attributes* configuration in Personio.
+
+**Requesting specific fields.** Use the `attributes` parameter to list the
+attribute keys you want:
+
+```javascript
+get_employee({ employee_id: 12345, attributes: ["first_name", "last_name", "email", "dynamic_14285869"] })
+list_employees({ attributes: ["first_name", "last_name", "department"] })
+```
+
+> [!IMPORTANT]
+> Personio's filtering is **restrictive**: passing `attributes` limits the
+> response to *exactly* those keys. Include **every** field you need (the core
+> fields too, e.g. `first_name`/`last_name` for the derived `name`) — anything
+> omitted will not be returned. Omit `attributes` entirely to get every
+> attribute the scope allows.
+
+**Naming dynamic custom fields.** Personio exposes custom fields under opaque
+`dynamic_<id>` keys. The server renames known ones to readable names via a
+central `DYNAMIC_FIELD_MAP` (default: `dynamic_14285869` → `shoe_size`). To name
+any other custom field without a code change, set the
+`PERSONIO_DYNAMIC_FIELD_MAP` environment variable to a JSON object; its entries
+are merged on top of the defaults:
+
+```bash
+PERSONIO_DYNAMIC_FIELD_MAP='{"dynamic_14285869":"shoe_size","dynamic_98765432":"cost_center"}'
+```
+
+Attributes not present in the map pass through under their original key.
+
+**Discovering a tenant's attribute keys.** Different Personio tenants expose
+different keys and `dynamic_<id>` values. To list everything a given employee
+exposes (key, label, value type, and any mapped name):
+
+```bash
+npm run build
+npm run attributes -- <employeeId>
+```
+
+Use that output to decide which keys to request via `attributes` and which
+`dynamic_<id>` fields to name in `PERSONIO_DYNAMIC_FIELD_MAP`.
+
+> [!NOTE]
+> **Example — compensation fields.** Salary is just one example of this generic
+> behaviour: to retrieve a salary field, add its attribute key to `attributes`;
+> if it is a custom field, map its `dynamic_<id>` in `PERSONIO_DYNAMIC_FIELD_MAP`
+> to give it a readable name. Be aware that Personio salary attributes are a
+> current master-data **snapshot per employee** — they are not actual monthly
+> payroll cost (no employer contributions, variable pay, or mid-month
+> joiners/leavers).
 
 ### Attendance Tools (V1 API)
 
