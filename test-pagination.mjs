@@ -36,8 +36,9 @@ function makeClient() {
 }
 
 // Minimal Employee shape understood by the real formatEmployeeData. Pass an
-// `office` name to attach the nested office attribute.
-function makeEmployee(id, firstName, lastName, { office } = {}) {
+// `office`/`department`/`position` name to attach those attributes, and `extra`
+// to attach arbitrary raw attributes (e.g. PII fields, for projection tests).
+function makeEmployee(id, firstName, lastName, { office, department, position, extra } = {}) {
   const attributes = {
     id: { label: 'ID', value: id },
     first_name: { label: 'First name', value: firstName },
@@ -49,6 +50,18 @@ function makeEmployee(id, firstName, lastName, { office } = {}) {
       label: 'Office',
       value: { type: 'Office', attributes: { id: 1, name: office } },
     };
+  }
+  if (department !== undefined) {
+    attributes.department = {
+      label: 'Department',
+      value: { type: 'Department', attributes: { id: 1, name: department } },
+    };
+  }
+  if (position !== undefined) {
+    attributes.position = { label: 'Position', value: position };
+  }
+  for (const [key, value] of Object.entries(extra ?? {})) {
+    attributes[key] = { label: key, value };
   }
   return { type: 'Employee', attributes };
 }
@@ -320,6 +333,105 @@ test('search_employees: caps results at limit and reports the full match total',
   assert.equal(body.results.length, 50, 'results are capped at the limit');
   assert.equal(body.count, 50);
   assert.equal(body.total, 120, 'total reflects all matches before slicing');
+});
+
+// ---------------------------------------------------------------------------
+// search_employees: `attributes` field selection / data minimization
+// ---------------------------------------------------------------------------
+
+// An employee carrying sensitive PII fields, so projection tests can assert
+// those fields are NOT leaked when the caller did not request them.
+function makePiiEmployee(id, firstName, lastName, opts = {}) {
+  return makeEmployee(id, firstName, lastName, {
+    department: opts.department,
+    position: opts.position,
+    extra: {
+      date_of_birth: '1990-01-01',
+      private_email: `${firstName}.private@personal.example`.toLowerCase(),
+      salary: 95000,
+      ...(opts.extra ?? {}),
+    },
+  });
+}
+
+test('search_employees: attributes=["name","department"] returns only those fields (plus id), no PII', async () => {
+  const dataset = [
+    makePiiEmployee(1, 'Grace', 'Hopper', { department: 'Engineering', position: 'Admiral' }),
+    makePiiEmployee(2, 'Alan', 'Turing', { department: 'Research', position: 'Cryptanalyst' }),
+  ];
+  const client = makeClient();
+  client.getEmployees = serverPaginatedGetEmployees(dataset);
+
+  const handlers = new EmployeeHandlers(client);
+  const body = parse(await handlers.handleSearchEmployees({ query: 'grace', attributes: ['name', 'department'] }));
+
+  assert.equal(body.results.length, 1);
+  const [result] = body.results;
+  assert.deepEqual(
+    Object.keys(result).sort(),
+    ['department', 'id', 'name'],
+    'exactly id + the requested name/department, nothing else'
+  );
+  assert.equal(result.name, 'Grace Hopper');
+  assert.equal(result.department, 'Engineering');
+  // Sensitive PII must be absent from the projected result.
+  for (const leak of ['date_of_birth', 'private_email', 'salary', 'email', 'position']) {
+    assert.equal(result[leak], undefined, `projected result must not expose ${leak}`);
+  }
+});
+
+test('search_employees: matches on department even when attributes excludes it (match fields fetched internally)', async () => {
+  // The caller asks ONLY for ["name"] but queries by department. The match field
+  // must still be fetched and evaluated internally, then dropped from output.
+  const dataset = [
+    makePiiEmployee(1, 'Katherine', 'Johnson', { department: 'Aerospace' }),
+    makePiiEmployee(2, 'Dorothy', 'Vaughan', { department: 'Computing' }),
+  ];
+  const client = makeClient();
+  client.getEmployees = serverPaginatedGetEmployees(dataset);
+
+  const handlers = new EmployeeHandlers(client);
+  const body = parse(await handlers.handleSearchEmployees({ query: 'aerospace', attributes: ['name'] }));
+
+  assert.equal(body.total, 1, 'matched on department despite it being excluded from attributes');
+  assert.equal(body.results.length, 1);
+  const [result] = body.results;
+  assert.deepEqual(Object.keys(result).sort(), ['id', 'name'], 'output reduced to id + name');
+  assert.equal(result.name, 'Katherine Johnson');
+  assert.equal(result.department, undefined, 'the match-only department field is dropped from output');
+});
+
+test('search_employees: omitting attributes returns the full record (backward compat)', async () => {
+  const dataset = [makePiiEmployee(1, 'Ada', 'Lovelace', { department: 'Analytical', position: 'Mathematician' })];
+  const client = makeClient();
+  client.getEmployees = serverPaginatedGetEmployees(dataset);
+
+  const handlers = new EmployeeHandlers(client);
+  const body = parse(await handlers.handleSearchEmployees({ query: 'ada' }));
+
+  assert.equal(body.results.length, 1);
+  const [result] = body.results;
+  // Full record: friendly aliases AND all passed-through attributes incl. PII.
+  for (const key of ['id', 'name', 'email', 'department', 'position', 'date_of_birth', 'private_email', 'salary']) {
+    assert.ok(key in result, `full record includes ${key}`);
+  }
+});
+
+test('search_employees: a raw key and a resolved name both work in attributes', async () => {
+  const dataset = [makePiiEmployee(1, 'Radia', 'Perlman', { department: 'Networking' })];
+  const client = makeClient();
+  client.getEmployees = serverPaginatedGetEmployees(dataset);
+  const handlers = new EmployeeHandlers(client);
+
+  // Resolved/derived name → the `name` output field.
+  const byName = parse(await handlers.handleSearchEmployees({ query: 'radia', attributes: ['name'] }));
+  assert.deepEqual(Object.keys(byName.results[0]).sort(), ['id', 'name']);
+  assert.equal(byName.results[0].name, 'Radia Perlman');
+
+  // Raw key → its own passed-through field (plus the always-on id + name).
+  const byRaw = parse(await handlers.handleSearchEmployees({ query: 'radia', attributes: ['first_name'] }));
+  assert.deepEqual(Object.keys(byRaw.results[0]).sort(), ['first_name', 'id', 'name']);
+  assert.equal(byRaw.results[0].first_name, 'Radia');
 });
 
 // ---------------------------------------------------------------------------

@@ -34,6 +34,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **either raw Personio keys or resolved output names** (e.g. `name`,
   `weekly_hours`, `shoe_size`, `kostenstelle_kurz`); names are translated back to
   the raw keys the API expects, with unknown names passed through unchanged.
+- `search_employees` now supports the same `attributes` field selection as
+  `get_employee` / `list_employees`, for **data minimization** — by default it
+  returns the full record per match (including PII such as birth date, private
+  email, salary), but passing `attributes` reduces each result to exactly the
+  requested fields (`id` and `name` always retained). The query is still matched
+  against name/email/department/position **regardless of the projection**: the
+  match fields are fetched internally (the union of requested attributes and the
+  required-for-matching keys) and then dropped from the output, so you can search
+  by department while returning only `["name"]`.
 - The tenant attribute schema (used for discovery and name translation) is cached
   with a configurable TTL via `PERSONIO_ATTRIBUTE_CACHE_TTL_SECONDS` (default 1
   hour; `0` disables caching) and refetched afterwards, so a long-running server

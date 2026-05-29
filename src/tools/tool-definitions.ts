@@ -88,6 +88,18 @@ export const toolDefinitions = [
           description: 'Number of matching results to skip for pagination',
           minimum: 0,
         },
+        attributes: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Optional: limit each result to these attributes (data minimization). ' +
+            'Accepts either raw Personio keys (e.g. "first_name", "dynamic_10913352") ' +
+            'or resolved output names (e.g. "name", "kostenstelle_kurz"); names are ' +
+            'translated to raw keys automatically. `id` and `name` are always ' +
+            'returned for usability. The query is still matched against ' +
+            'name/email/department/position regardless of what you request here. ' +
+            'Call list_employee_attributes to discover available attributes.',
+        },
       },
       required: ['query'],
     },

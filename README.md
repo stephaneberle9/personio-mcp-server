@@ -231,6 +231,13 @@ and paginated exactly once):
     - Includes office/location field in all employee records
 
 - `search_employees`: Search for employees by name, email, or department
+  - **Parameters:**
+    - `query`: Search query (matched against name, email, department, position)
+    - `limit`: Maximum number of matching results to return (default: 50)
+    - `offset`: Number of matching results to skip for pagination
+    - `attributes`: Limit each result to these fields — same field-selection /
+      data-minimization capability as `get_employee`/`list_employees`. See
+      [Retrieving additional attributes](#retrieving-additional-attributes).
 
 **Example Usage:**
 ```javascript
@@ -246,10 +253,11 @@ list_employees({ office: "Berlin", format: "csv" })
 
 ### Retrieving additional attributes
 
-Beyond the friendly core fields, `get_employee` and `list_employees` return
-**any attribute the Personio API credential's scope permits**. There is no
-hardcoded whitelist — the set of fields you get back depends entirely on the
-credential's *readable attributes* configuration in Personio.
+Beyond the friendly core fields, `get_employee`, `list_employees`, and
+`search_employees` return **any attribute the Personio API credential's scope
+permits**. There is no hardcoded whitelist — the set of fields you get back
+depends entirely on the credential's *readable attributes* configuration in
+Personio.
 
 **Requesting specific fields.** Use the `attributes` parameter to list the
 fields you want. You can mix **raw Personio keys** and **resolved output names**
@@ -260,6 +268,7 @@ the raw keys the API expects:
 // raw keys, resolved output names, and friendly aliases all work:
 get_employee({ employee_id: 12345, attributes: ["name", "email", "shoe_size", "kostenstelle_kurz"] })
 list_employees({ attributes: ["first_name", "last_name", "department"] })
+search_employees({ query: "engineering", attributes: ["name", "department"] })
 ```
 
 > [!IMPORTANT]
@@ -268,6 +277,16 @@ list_employees({ attributes: ["first_name", "last_name", "department"] })
 > fields too, e.g. `first_name`/`last_name` — or just the derived `name`, which
 > expands to both) — anything omitted will not be returned. Omit `attributes`
 > entirely to get every attribute the scope allows.
+
+`search_employees` applies one extra rule on top of the above:
+
+> [!NOTE]
+> For `search_employees`, `attributes` controls **only the output projection**
+> for data minimization — it never narrows what the query matches on. The query
+> is always evaluated against name/email/department/position, so you can search
+> by department while returning just `["name"]`; the match fields are fetched
+> internally and then dropped from the result. `id` and `name` are always
+> returned for usability.
 
 **Naming dynamic custom fields.** Personio exposes custom fields under opaque
 `dynamic_<id>` keys. The server resolves each one to a readable output key using

@@ -802,6 +802,31 @@ export class PersonioClient {
     return [...new Set(resolved)];
   }
 
+  /**
+   * Translate caller-supplied attribute names — resolved output names, raw
+   * Personio keys, or friendly aliases (`name`, `weekly_hours`) — into the
+   * OUTPUT keys their values are surfaced under by `formatEmployeeData`. This is
+   * the inverse direction of `resolveRequestedAttributes`: that one yields the
+   * raw keys to REQUEST from the API, this one yields the keys to PROJECT a
+   * formatted result down to (for data minimization in `search_employees`).
+   * Unknown names pass through unchanged. Loads the tenant schema (cached) only
+   * when given a non-empty list.
+   */
+  async resolveOutputKeys(names?: string[]): Promise<string[]> {
+    if (!names || names.length === 0) return [];
+
+    // Friendly aliases are surfaced under their own name; every schema key maps
+    // to its output_key, and each output_key maps to itself so callers may pass
+    // either form. First write wins, mirroring formatEmployeeData's precedence.
+    const forward = new Map<string, string>();
+    for (const alias of Object.keys(FRIENDLY_ALIAS_REVERSE)) forward.set(alias, alias);
+    for (const { key, output_key } of await this.getAttributeSchema()) {
+      if (!forward.has(key)) forward.set(key, output_key);
+      if (!forward.has(output_key)) forward.set(output_key, output_key);
+    }
+    return names.map(name => forward.get(name) ?? name);
+  }
+
   // Attendance endpoints
   async getAttendances(params?: {
     start_date?: string;

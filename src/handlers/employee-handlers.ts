@@ -9,6 +9,22 @@ const LIST_EMPLOYEES_BOUNDS = { defaultLimit: 200, maxLimit: 200 };
 // Advertised bounds for search_employees results (mirrors inputSchema).
 const SEARCH_EMPLOYEES_BOUNDS = { defaultLimit: 50, maxLimit: 200 };
 
+// Raw Personio keys the search query is matched against (name → first_name +
+// last_name). The internal fetch ALWAYS includes these, even when the caller's
+// `attributes` exclude them, so the query filter can never break; they are then
+// dropped from the OUTPUT projection unless the caller asked for them.
+const SEARCH_MATCH_RAW_KEYS = ['first_name', 'last_name', 'email', 'department', 'position'];
+
+// Reduce a formatted employee to exactly `keys`, dropping every other field.
+// Only defined values are copied so the shape mirrors an unprojected result.
+function projectEmployee(employee: Record<string, unknown>, keys: Set<string>): Record<string, unknown> {
+  const projected: Record<string, unknown> = {};
+  for (const key of keys) {
+    if (employee[key] !== undefined) projected[key] = employee[key];
+  }
+  return projected;
+}
+
 export class EmployeeHandlers {
   constructor(private personioClient: PersonioClient) {}
 
@@ -110,12 +126,33 @@ export class EmployeeHandlers {
       throw new McpError(ErrorCode.InvalidParams, 'Invalid search arguments');
     }
 
+    // Optional `attributes` mirrors list_employees/get_employee: it limits the
+    // fields returned per result (data minimization). The query, however, always
+    // matches on name/email/department/position — so the internal fetch must
+    // request the UNION of the caller's attributes and the match fields, even
+    // when the caller excluded them, or matching would break. The OUTPUT is then
+    // projected back down to just what the caller asked for (plus id and name).
+    const requested: string[] | undefined = args.attributes?.length ? args.attributes : undefined;
+    let fetchAttributes: string[] | undefined;
+    let projectKeys: Set<string> | undefined;
+    if (requested) {
+      const resolved = (await this.personioClient.resolveRequestedAttributes(requested)) ?? [];
+      fetchAttributes = [...new Set([...resolved, ...SEARCH_MATCH_RAW_KEYS])];
+      // id and name are always retained for usability (a result the caller can
+      // neither identify nor address is useless); the rest are exactly the
+      // requested output keys.
+      const outputKeys = await this.personioClient.resolveOutputKeys(requested);
+      projectKeys = new Set(['id', 'name', ...outputKeys]);
+    }
+
     // `limit` for search caps the number of RETURNED RESULTS, not the number of
     // employees scanned. The query must run across the FULL employee set —
     // otherwise matches beyond the first page are silently missed (this only
     // ever "worked" because the v1 endpoint ignored getEmployees' limit). Fetch
     // every employee, filter, THEN slice the filtered results.
-    const response = await this.personioClient.getAllEmployees();
+    const response = await this.personioClient.getAllEmployees(
+      fetchAttributes ? { attributes: fetchAttributes } : undefined
+    );
 
     const query = args.query.toLowerCase();
     const matches = response.data
@@ -127,11 +164,15 @@ export class EmployeeHandlers {
         emp.position?.toLowerCase().includes(query)
       );
 
-    const { items: results, offset, limit } = applyOffsetLimit(
+    const { items: page, offset, limit } = applyOffsetLimit(
       matches,
       { offset: args?.offset, limit: args.limit },
       SEARCH_EMPLOYEES_BOUNDS
     );
+
+    // Project AFTER matching (which needed the match fields) and AFTER slicing
+    // (only the page is reshaped). Omitting `attributes` keeps the full record.
+    const results = projectKeys ? page.map(emp => projectEmployee(emp, projectKeys!)) : page;
 
     return {
       content: [

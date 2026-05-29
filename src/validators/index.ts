@@ -17,6 +17,7 @@ export interface SearchArgs {
   query: string;
   limit?: number;
   offset?: number;
+  attributes?: string[];
 }
 
 export interface AttendanceArgs {
@@ -66,7 +67,8 @@ export const isValidSearchArgs = (args: any): args is SearchArgs =>
   args !== null &&
   typeof args.query === 'string' &&
   (args.limit === undefined || typeof args.limit === 'number') &&
-  (args.offset === undefined || typeof args.offset === 'number');
+  (args.offset === undefined || typeof args.offset === 'number') &&
+  (args.attributes === undefined || Array.isArray(args.attributes));
 
 export const isValidAttendanceArgs = (args: any): args is AttendanceArgs =>
   typeof args === 'object' &&
