@@ -12,8 +12,10 @@
  * Use the output to decide:
  *   - which keys to request via the `attributes` parameter of
  *     get_employee / list_employees, and
- *   - which `dynamic_<id>` keys to give a readable name via DYNAMIC_FIELD_MAP /
- *     the PERSONIO_DYNAMIC_FIELD_MAP env var.
+ *   - which `dynamic_<id>` keys need an explicit name override via
+ *     DYNAMIC_FIELD_MAP / the PERSONIO_DYNAMIC_FIELD_MAP env var. Unmapped
+ *     fields are auto-named from their label (shown in the OUTPUT KEY column),
+ *     so you only override the ones whose label is a poor fit.
  *
  * No attribute IDs are hardcoded here — everything is read live from the API.
  *
@@ -24,7 +26,7 @@
  */
 
 import 'dotenv/config';
-import { PersonioClient, DYNAMIC_FIELD_MAP } from './build/api/personio-client.js';
+import { PersonioClient, buildAttributeSchema } from './build/api/personio-client.js';
 
 const employeeId = Number(process.argv[2]);
 
@@ -42,17 +44,12 @@ if (!clientId || !clientSecret) {
   process.exit(1);
 }
 
-function describeValue(value) {
-  if (value === null) return 'null';
-  if (Array.isArray(value)) return 'array';
-  return typeof value;
-}
-
 async function main() {
   const client = new PersonioClient({ clientId, clientSecret });
 
   // Request all readable attributes (no `attributes` filter => API returns
-  // everything the scope permits for this employee).
+  // everything the scope permits for this employee). Build the same schema the
+  // list_employee_attributes tool returns, so CLI and tool stay in lockstep.
   const response = await client.getEmployee(employeeId);
   const attrs = response?.data?.attributes;
 
@@ -61,27 +58,26 @@ async function main() {
     process.exit(1);
   }
 
-  const keys = Object.keys(attrs).sort();
-  console.log(`\nEmployee ${employeeId} — ${keys.length} attribute(s) returned by the API scope:\n`);
+  const schema = buildAttributeSchema(attrs).sort((a, b) => a.key.localeCompare(b.key));
+  console.log(`\nEmployee ${employeeId} — ${schema.length} attribute(s) returned by the API scope:\n`);
 
+  // OUTPUT KEY is the name the field is surfaced under in get_employee /
+  // list_employees; SOURCE (map | label | key) shows where that name came from
+  // so you can tell which fields rely on the auto-derived label.
   const col = (s, width) => String(s).padEnd(width);
-  console.log(`${col('KEY', 28)}${col('TYPE', 10)}${col('MAPPED NAME', 18)}LABEL`);
-  console.log('-'.repeat(96));
+  console.log(`${col('KEY', 28)}${col('TYPE', 10)}${col('OUTPUT KEY', 36)}${col('SOURCE', 9)}LABEL`);
+  console.log('-'.repeat(110));
 
-  for (const key of keys) {
-    const attr = attrs[key] ?? {};
-    const label = attr.label ?? '';
-    const type = describeValue(attr.value);
-    const mapped = DYNAMIC_FIELD_MAP[key] ?? '';
-    console.log(`${col(key, 28)}${col(type, 10)}${col(mapped, 18)}${label}`);
+  for (const { key, type, output_key, source, label } of schema) {
+    console.log(`${col(key, 28)}${col(type, 10)}${col(output_key, 36)}${col(source, 9)}${label ?? ''}`);
   }
 
-  const dynamicKeys = keys.filter((k) => k.startsWith('dynamic_'));
-  if (dynamicKeys.length > 0) {
+  const labelDerived = schema.filter((a) => a.source === 'label');
+  if (labelDerived.length > 0) {
     console.log(
-      `\nTip: ${dynamicKeys.length} dynamic_<id> custom field(s) found. ` +
-        `Give any of them a readable name by adding it to PERSONIO_DYNAMIC_FIELD_MAP, e.g.:\n` +
-        `  PERSONIO_DYNAMIC_FIELD_MAP='{"${dynamicKeys[0]}":"my_field"}'`
+      `\nTip: ${labelDerived.length} dynamic_<id> field(s) are auto-named from their label ` +
+        `(SOURCE=label). Override any whose name is a poor fit via PERSONIO_DYNAMIC_FIELD_MAP, e.g.:\n` +
+        `  PERSONIO_DYNAMIC_FIELD_MAP='{"${labelDerived[0].key}":"my_field"}'`
     );
   }
 }

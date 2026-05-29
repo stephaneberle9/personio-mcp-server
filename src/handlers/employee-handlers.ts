@@ -11,7 +11,17 @@ export class EmployeeHandlers {
       throw new McpError(ErrorCode.InvalidParams, 'Invalid employee arguments');
     }
 
-    const response = await this.personioClient.getEmployee(args.employee_id, args.attributes);
+    // Accept either raw Personio keys or resolved output names in `attributes`,
+    // translating the latter back to the raw keys the API filter expects. Seed
+    // the (cached) schema from this same employee so the get path needs no
+    // employee-list scope.
+    let attributes = args.attributes;
+    if (attributes?.length) {
+      await this.personioClient.getAttributeSchema(args.employee_id);
+      attributes = await this.personioClient.resolveRequestedAttributes(attributes);
+    }
+
+    const response = await this.personioClient.getEmployee(args.employee_id, attributes);
     const formattedEmployee = this.personioClient.formatEmployeeData(response.data);
 
     return {
@@ -29,10 +39,13 @@ export class EmployeeHandlers {
       throw new McpError(ErrorCode.InvalidParams, 'Invalid employees list arguments');
     }
 
+    // Accept either raw Personio keys or resolved output names in `attributes`.
+    const attributes = await this.personioClient.resolveRequestedAttributes(args?.attributes);
+
     const response = await this.personioClient.getEmployees({
       limit: args?.limit || 200,
       offset: args?.offset || 0,
-      attributes: args?.attributes,
+      attributes,
       office: args?.office,
     });
 
@@ -97,6 +110,31 @@ export class EmployeeHandlers {
             query: args.query,
             results: filteredEmployees,
             count: filteredEmployees.length,
+          }, null, 2),
+        },
+      ],
+    };
+  }
+
+  async handleListEmployeeAttributes(args: any) {
+    // employee_id is optional: labels are tenant-global, so any employee's
+    // attribute set describes the schema. Sample a specific one if asked.
+    const employeeId =
+      typeof args?.employee_id === 'number' ? args.employee_id : undefined;
+
+    const attributes = await this.personioClient.getAttributeSchema(employeeId);
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            attributes,
+            count: attributes.length,
+            usage:
+              'Request fields via the `attributes` parameter of get_employee / ' +
+              'list_employees using either `key` or `output_key`. Values are ' +
+              'returned under `output_key`.',
           }, null, 2),
         },
       ],

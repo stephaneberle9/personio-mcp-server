@@ -15,7 +15,13 @@ export const toolDefinitions = [
         attributes: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Optional: specific attributes to retrieve',
+          description:
+            'Optional: limit the response to these attributes. Accepts either raw ' +
+            'Personio keys (e.g. "first_name", "dynamic_10913352") or resolved ' +
+            'output names (e.g. "name", "kostenstelle_kurz"); names are translated ' +
+            'to raw keys automatically. Passing this limits the response to exactly ' +
+            'these fields, so include every field you need. Call ' +
+            'list_employee_attributes to discover available attributes.',
         },
       },
       required: ['employee_id'],
@@ -41,7 +47,13 @@ export const toolDefinitions = [
         attributes: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Optional: specific attributes to retrieve',
+          description:
+            'Optional: limit the response to these attributes. Accepts either raw ' +
+            'Personio keys (e.g. "first_name", "dynamic_10913352") or resolved ' +
+            'output names (e.g. "name", "kostenstelle_kurz"); names are translated ' +
+            'to raw keys automatically. Passing this limits the response to exactly ' +
+            'these fields, so include every field you need. Call ' +
+            'list_employee_attributes to discover available attributes.',
         },
         office: {
           type: 'string',
@@ -73,6 +85,27 @@ export const toolDefinitions = [
         },
       },
       required: ['query'],
+    },
+  },
+  {
+    name: 'list_employee_attributes',
+    description:
+      'Discover which employee attributes this Personio account exposes. Returns, ' +
+      'for each attribute, its raw `key`, the `output_key` it is surfaced under, ' +
+      'the `source` of that name (map | label | key), its `label` and value `type`. ' +
+      'Use this to learn which field names to pass to the `attributes` parameter of ' +
+      'get_employee / list_employees (either key works) and how custom `dynamic_<id>` ' +
+      'fields are named.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        employee_id: {
+          type: 'number',
+          description:
+            'Optional: sample the schema from this employee. Labels are the same ' +
+            'tenant-wide, so any employee works; omit to use the first listed one.',
+        },
+      },
     },
   },
 

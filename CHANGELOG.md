@@ -13,16 +13,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   retrieve additional fields by listing them in the `attributes` parameter.
   Note Personio's restrictive filtering: passing `attributes` limits the
   response to exactly those keys, so include every field you need.
+- Automatic readable names for `dynamic_<id>` custom fields: when a field is not
+  explicitly mapped, its Personio label is slugified into the output key (e.g.
+  `"Kostenstelle kurz"` → `kostenstelle_kurz`; German umlauts transliterated).
+  Colliding derived keys fall back to the raw `dynamic_<id>` key so no value is
+  silently dropped. `slugifyLabel`/`resolveAttributeKey` are exported for reuse.
 - `DYNAMIC_FIELD_MAP` for renaming Personio `dynamic_<id>` custom fields to
   readable names, overridable/extensible at runtime via the
   `PERSONIO_DYNAMIC_FIELD_MAP` environment variable (JSON), merged over the
-  built-in defaults — so tenant-specific field IDs can be named without a code
-  change.
+  built-in defaults. Given the automatic label naming above, it is only needed
+  to *override* labels that are missing or a poor fit — no code change required.
+- `list_employee_attributes` tool: discovers, at runtime, every attribute the
+  scope exposes — its raw `key`, the `output_key` it is surfaced under, that
+  name's `source` (`map` | `label` | `key`), `label` and value `type`. Lets the
+  AI/agent learn which field names to request without a code change.
+- MCP **resource** `personio://employees/attributes` exposing the same attribute
+  catalog, so clients can attach it to context proactively (complements the
+  tool, which the model calls on demand). Adds the `resources` server capability.
+- The `attributes` parameter of `get_employee` / `list_employees` now accepts
+  **either raw Personio keys or resolved output names** (e.g. `name`,
+  `weekly_hours`, `shoe_size`, `kostenstelle_kurz`); names are translated back to
+  the raw keys the API expects, with unknown names passed through unchanged.
+- The tenant attribute schema (used for discovery and name translation) is cached
+  with a configurable TTL via `PERSONIO_ATTRIBUTE_CACHE_TTL_SECONDS` (default 1
+  hour; `0` disables caching) and refetched afterwards, so a long-running server
+  (e.g. a web connector) picks up renamed labels and new custom fields.
 - `print-attributes.mjs` helper (`npm run attributes -- <employeeId>`) that
-  lists every attribute key, label, value type, and mapped name a tenant
-  exposes for an employee — the generic way to discover which keys/`dynamic_<id>`
-  fields to request and name.
-- Offline unit tests for `formatEmployeeData` (`npm run test:unit`).
+  prints the same attribute schema (key, output key + source, label, value type)
+  as a table — the developer-facing counterpart to `list_employee_attributes`.
+- Offline unit tests for `formatEmployeeData` and the attribute-schema helpers
+  (`npm run test:unit`).
 
 ### Changed
 - `formatEmployeeData` preserves falsy attribute values (`0`, `false`, `""`)

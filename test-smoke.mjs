@@ -160,6 +160,31 @@ await test('searchEmployees', async () => {
   assert(Array.isArray(data.results), 'results is array');
 });
 
+await test('listEmployeeAttributes', async () => {
+  const result = await employeeH.handleListEmployeeAttributes({});
+  const data = parseResult(result);
+  assert(Array.isArray(data.attributes), 'attributes is array');
+  assert(data.attributes.length > 0, 'at least one attribute');
+  const first = data.attributes[0];
+  assert(typeof first.key === 'string', 'attribute has a key');
+  assert(typeof first.output_key === 'string', 'attribute has an output_key');
+  assert(['map', 'label', 'key'].includes(first.source), 'attribute has a valid source');
+});
+
+if (ids.employeeId) {
+  // Regression: requesting by a resolved/friendly name (not a raw key) must be
+  // translated back to the raw key(s) the API expects. `name` resolves to
+  // first_name + last_name, so a successful round-trip proves the translation.
+  await test('getEmployee accepts resolved attribute names', async () => {
+    const result = await employeeH.handleGetEmployee({
+      employee_id: ids.employeeId,
+      attributes: ['name'],
+    });
+    const data = parseResult(result);
+    assert(typeof data.name === 'string' && data.name.length > 0, 'name resolved via translated keys');
+  });
+}
+
 // ── 3. Attendance V1 ────────────────────────────────────────────────
 
 group('3. Attendance V1');

@@ -66,10 +66,16 @@ Set the following environment variables:
 
 - `PERSONIO_CLIENT_ID`: Your Personio API client ID
 - `PERSONIO_CLIENT_SECRET`: Your Personio API client secret
-- `PERSONIO_DYNAMIC_FIELD_MAP` *(optional)*: JSON object mapping Personio
-  `dynamic_<id>` custom-field keys to readable names, e.g.
-  `{"dynamic_14285869":"shoe_size"}`. Merged on top of the built-in defaults.
-  See [Retrieving additional attributes](#retrieving-additional-attributes).
+- `PERSONIO_DYNAMIC_FIELD_MAP` *(optional)*: JSON object overriding the readable
+  name for specific Personio `dynamic_<id>` custom-field keys, e.g.
+  `{"dynamic_14285869":"shoe_size"}`. Usually unnecessary — unmapped fields are
+  named automatically from their Personio label. See
+  [Retrieving additional attributes](#retrieving-additional-attributes).
+- `PERSONIO_ATTRIBUTE_CACHE_TTL_SECONDS` *(optional)*: how long the attribute
+  schema (used by `list_employee_attributes` and for translating attribute
+  names) is cached before being refetched. Defaults to `3600` (1 hour). Lower it
+  for a long-running deployment that must pick up renamed labels or new custom
+  fields sooner; `0` disables caching entirely.
 
 You can set these in a `.env` file in the project root:
 
@@ -197,48 +203,82 @@ hardcoded whitelist — the set of fields you get back depends entirely on the
 credential's *readable attributes* configuration in Personio.
 
 **Requesting specific fields.** Use the `attributes` parameter to list the
-attribute keys you want:
+fields you want. You can mix **raw Personio keys** and **resolved output names**
+(see *Naming dynamic custom fields* below) — the server translates names back to
+the raw keys the API expects:
 
 ```javascript
-get_employee({ employee_id: 12345, attributes: ["first_name", "last_name", "email", "dynamic_14285869"] })
+// raw keys, resolved output names, and friendly aliases all work:
+get_employee({ employee_id: 12345, attributes: ["name", "email", "shoe_size", "kostenstelle_kurz"] })
 list_employees({ attributes: ["first_name", "last_name", "department"] })
 ```
 
 > [!IMPORTANT]
 > Personio's filtering is **restrictive**: passing `attributes` limits the
 > response to *exactly* those keys. Include **every** field you need (the core
-> fields too, e.g. `first_name`/`last_name` for the derived `name`) — anything
-> omitted will not be returned. Omit `attributes` entirely to get every
-> attribute the scope allows.
+> fields too, e.g. `first_name`/`last_name` — or just the derived `name`, which
+> expands to both) — anything omitted will not be returned. Omit `attributes`
+> entirely to get every attribute the scope allows.
 
 **Naming dynamic custom fields.** Personio exposes custom fields under opaque
-`dynamic_<id>` keys. The server renames known ones to readable names via a
-central `DYNAMIC_FIELD_MAP` (default: `dynamic_14285869` → `shoe_size`). To name
-any other custom field without a code change, set the
-`PERSONIO_DYNAMIC_FIELD_MAP` environment variable to a JSON object; its entries
-are merged on top of the defaults:
+`dynamic_<id>` keys. The server resolves each one to a readable output key using
+the following precedence:
+
+1. **Explicit mapping** — an entry in `PERSONIO_DYNAMIC_FIELD_MAP` (or the
+   built-in `DYNAMIC_FIELD_MAP` default `dynamic_14285869` → `shoe_size`) always
+   wins.
+2. **Automatic label** — otherwise the field's own Personio label is slugified,
+   e.g. `"Kostenstelle kurz"` → `kostenstelle_kurz`, `"Mobil (itemis)"` →
+   `mobil_itemis`. German umlauts are transliterated (ä→ae, ö→oe, ü→ue, ß→ss).
+3. **Raw key** — if there is no label, the field keeps its `dynamic_<id>` key.
+
+This means **you usually don't need to configure anything** — labels are used
+automatically. Set `PERSONIO_DYNAMIC_FIELD_MAP` only to *override* the cases
+where a label is missing or a poor fit:
 
 ```bash
 PERSONIO_DYNAMIC_FIELD_MAP='{"dynamic_14285869":"shoe_size","dynamic_98765432":"cost_center"}'
 ```
 
-Attributes not present in the map pass through under their original key.
+If two labels would slugify to the same key (or a derived key would clash with a
+built-in field like `status`), the first field keeps the readable name and the
+colliding one falls back to its raw `dynamic_<id>` key, so no value is ever
+silently dropped. Non-dynamic attributes always pass through under their
+original key.
 
 **Discovering a tenant's attribute keys.** Different Personio tenants expose
-different keys and `dynamic_<id>` values. To list everything a given employee
-exposes (key, label, value type, and any mapped name):
+different keys and `dynamic_<id>` values. There are two ways to find out what is
+available:
 
-```bash
-npm run build
-npm run attributes -- <employeeId>
-```
+- **At runtime (for the AI/agent)** — the `list_employee_attributes` tool returns,
+  for every attribute the scope exposes, its raw `key`, the `output_key` it is
+  surfaced under, the `source` of that name (`map` | `label` | `key`), its
+  `label` and value `type`. Either `key` or `output_key` can then be passed to
+  `attributes`. The `attributes` parameter descriptions point here, so the agent
+  can discover fields on its own.
+- **As an MCP resource (for the client/user)** — the same catalog is exposed at
+  the resource URI `personio://employees/attributes`, so clients that support
+  resources can attach it to the model's context proactively (no tool call
+  needed). The tool and the resource serve the same data from one cached source.
+- **From the shell (for developers)** — the `print-attributes` helper prints the
+  same schema as a table:
 
-Use that output to decide which keys to request via `attributes` and which
-`dynamic_<id>` fields to name in `PERSONIO_DYNAMIC_FIELD_MAP`.
+  ```bash
+  npm run build
+  npm run attributes -- <employeeId>
+  ```
+
+Use either to decide which fields to request via `attributes`, and to spot any
+`dynamic_<id>` fields whose auto-derived label name you want to override in
+`PERSONIO_DYNAMIC_FIELD_MAP`.
+
+The schema is cached and refetched periodically (see
+`PERSONIO_ATTRIBUTE_CACHE_TTL_SECONDS`), so renamed labels and newly added custom
+fields are picked up automatically by a long-running server.
 
 > [!NOTE]
 > **Example — compensation fields.** Salary is just one example of this generic
-> behaviour: to retrieve a salary field, add its attribute key to `attributes`;
+> behavior: to retrieve a salary field, add its attribute key to `attributes`;
 > if it is a custom field, map its `dynamic_<id>` in `PERSONIO_DYNAMIC_FIELD_MAP`
 > to give it a readable name. Be aware that Personio salary attributes are a
 > current master-data **snapshot per employee** — they are not actual monthly

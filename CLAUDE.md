@@ -43,7 +43,7 @@ src/
 │   ├── approval-handlers.ts          # pending, attendance/absence status, summary
 │   ├── recruiting-handlers.ts        # v2 recruiting API (apps, candidates, jobs)
 │   └── utility-handlers.ts           # health check
-├── tools/tool-definitions.ts         # All 52 tool schemas (JSON Schema)
+├── tools/tool-definitions.ts         # All 40+ tool schemas (JSON Schema)
 ├── validators/index.ts               # Input validation functions
 └── utils/export-helpers.ts           # CSV export
 test-smoke.mjs                        # Smoke test suite (no framework)
@@ -126,7 +126,7 @@ personio-mcp-setup
 # → Verifies installation
 
 # 3. Restart Claude Desktop
-# Done! All 52 Personio tools available in Claude
+# Done! All 41 Personio tools available in Claude
 ```
 
 ### Package Contents

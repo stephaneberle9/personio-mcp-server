@@ -3,6 +3,37 @@ import { PersonioAuth, PersonioAuthConfig } from '../auth/personio-auth.js';
 
 export interface PersonioClientConfig extends PersonioAuthConfig {
   baseUrl?: string;
+  /**
+   * How long the tenant attribute schema is cached, in milliseconds. Defaults to
+   * `PERSONIO_ATTRIBUTE_CACHE_TTL_SECONDS` (or 1 hour). `0` disables caching
+   * (the schema is refetched on every use). See `getAttributeSchema`.
+   */
+  attributeCacheTtlMs?: number;
+}
+
+/** Default attribute-schema cache TTL when none is configured: 1 hour. */
+const DEFAULT_ATTRIBUTE_CACHE_TTL_MS = 3_600_000;
+
+/**
+ * Resolve the attribute-schema cache TTL (ms) from
+ * `PERSONIO_ATTRIBUTE_CACHE_TTL_SECONDS`. A long-running deployment (e.g. a web
+ * connector) must periodically re-read the schema so renamed labels and newly
+ * added custom fields are eventually picked up — hence a finite default rather
+ * than caching for the whole process lifetime. `0` disables caching entirely;
+ * an empty/invalid value falls back to the default.
+ */
+function defaultAttributeCacheTtlMs(): number {
+  const raw = process.env.PERSONIO_ATTRIBUTE_CACHE_TTL_SECONDS;
+  if (raw === undefined || raw.trim() === '') return DEFAULT_ATTRIBUTE_CACHE_TTL_MS;
+
+  const seconds = Number(raw);
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    console.error(
+      `Invalid PERSONIO_ATTRIBUTE_CACHE_TTL_SECONDS (expected a non-negative number of seconds): ${raw}`
+    );
+    return DEFAULT_ATTRIBUTE_CACHE_TTL_MS;
+  }
+  return seconds * 1000;
 }
 
 /**
@@ -12,13 +43,18 @@ export interface PersonioClientConfig extends PersonioAuthConfig {
  * name instead. Tenant-specific IDs differ between Personio accounts, so this
  * is only a small set of sensible defaults.
  *
+ * In most cases this can stay empty: when a `dynamic_<id>` field is *not* listed
+ * here, the server derives a readable key from the field's own Personio label
+ * (e.g. `"Kostenstelle kurz"` → `kostenstelle_kurz`). This map is only needed to
+ * *override* the cases where the label is missing or a poor fit.
+ *
  * Extend or override it at runtime — without a code change — via the
  * `PERSONIO_DYNAMIC_FIELD_MAP` environment variable, which must contain a JSON
  * object of `{ "dynamic_<id>": "readable_name" }`. Entries from the env var are
  * merged on top of these defaults (env values win on key collisions).
  *
  * Use the `print-attributes` helper script to discover which `dynamic_<id>`
- * keys a given tenant actually exposes.
+ * keys a given tenant actually exposes, and their labels.
  */
 const DEFAULT_DYNAMIC_FIELD_MAP: Record<string, string> = {
   dynamic_14285869: 'shoe_size',
@@ -53,6 +89,156 @@ function loadDynamicFieldMap(): Record<string, string> {
  * plus any `PERSONIO_DYNAMIC_FIELD_MAP` override.
  */
 export const DYNAMIC_FIELD_MAP: Record<string, string> = loadDynamicFieldMap();
+
+/**
+ * Turn a human-readable Personio attribute label into a JSON/identifier-friendly
+ * key, e.g. `"Kostenstelle kurz"` → `kostenstelle_kurz`, `"Mobil (itemis)"` →
+ * `mobil_itemis`. German umlauts are transliterated (ä→ae, ö→oe, ü→ue, ß→ss)
+ * before remaining diacritics are stripped, so the result stays ASCII. Returns
+ * an empty string for a missing/blank label, signalling the caller to fall back
+ * to the raw attribute key.
+ */
+export function slugifyLabel(label: unknown): string {
+  if (typeof label !== 'string') return '';
+  return label
+    .replace(/ä/g, 'ae')
+    .replace(/ö/g, 'oe')
+    .replace(/ü/g, 'ue')
+    .replace(/Ä/g, 'ae')
+    .replace(/Ö/g, 'oe')
+    .replace(/Ü/g, 'ue')
+    .replace(/ß/g, 'ss')
+    .normalize('NFKD') // decompose remaining accents (é → e + combining mark)
+    .replace(/[̀-ͯ]/g, '') // strip the combining marks
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_') // any run of non-alphanumerics → single underscore
+    .replace(/^_+|_+$/g, ''); // trim leading/trailing underscores
+}
+
+/**
+ * Resolve the output key a Personio attribute should be surfaced under, applying
+ * (in order of precedence):
+ *   1. an explicit `DYNAMIC_FIELD_MAP` / `PERSONIO_DYNAMIC_FIELD_MAP` entry,
+ *   2. for opaque `dynamic_<id>` custom fields, the slugified API label, and
+ *   3. the raw attribute key as a last resort.
+ *
+ * Label derivation is intentionally scoped to `dynamic_<id>` keys so that
+ * standard attributes (`cost_centers`, `created_at`, …) keep their expected,
+ * stable keys. Note this only computes the *desired* key — collision handling
+ * (two labels slugging to the same name, or a slug clashing with a friendly
+ * alias) lives in `formatEmployeeData`, which can see what is already taken.
+ */
+export function resolveAttributeKey(key: string, label?: unknown): string {
+  const mapped = DYNAMIC_FIELD_MAP[key];
+  if (mapped) return mapped;
+
+  if (key.startsWith('dynamic_')) {
+    const slug = slugifyLabel(label);
+    if (slug) return slug;
+  }
+
+  return key;
+}
+
+/**
+ * Output keys that `formatEmployeeData` always derives up front (its friendly
+ * aliases), reserved so a dynamic field whose label happens to slugify to one of
+ * them falls back to its raw key instead of clobbering the alias — exactly the
+ * collision behavior `formatEmployeeData` itself applies.
+ */
+const RESERVED_OUTPUT_KEYS = [
+  'id', 'name', 'email', 'position', 'department', 'office', 'status',
+  'hire_date', 'weekly_hours',
+];
+
+/**
+ * Reverse of the friendly aliases `formatEmployeeData` derives under a *different*
+ * name than the underlying raw attribute key(s). Lets callers request the
+ * friendly name (`name`, `weekly_hours`) and have it translated back to the raw
+ * Personio key(s) the API filter expects. Aliases that keep their raw key
+ * (`email`, `position`, …) need no entry — they pass through unchanged.
+ */
+const FRIENDLY_ALIAS_REVERSE: Record<string, string[]> = {
+  name: ['first_name', 'last_name'],
+  weekly_hours: ['weekly_working_hours'],
+};
+
+/** JS type of an attribute value, for human-/agent-readable schema output. */
+function describeAttributeType(value: unknown): string {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'array';
+  return typeof value;
+}
+
+/** A single attribute as exposed to callers: how to request it vs. how it returns. */
+export interface AttributeInfo {
+  /** Raw Personio key — use this in the `attributes` request filter. */
+  key: string;
+  /** Key the value is surfaced under in get_employee / list_employees output. */
+  output_key: string;
+  /** Where output_key came from: explicit map, derived label, or the raw key. */
+  source: 'map' | 'label' | 'key';
+  /** Human-readable Personio label, if any. */
+  label: string | null;
+  /** JS type of the attribute value (string, number, array, object, null, …). */
+  type: string;
+}
+
+/**
+ * Build the attribute schema for an employee's raw `attributes` object: for each
+ * key, the output name it is surfaced under (mirroring `formatEmployeeData`'s
+ * precedence and collision handling) plus its label and value type. Powers both
+ * the discovery tool and the request-side reverse translation.
+ */
+export function buildAttributeSchema(
+  attrs: Record<string, { label?: unknown; value?: unknown }>
+): AttributeInfo[] {
+  const taken = new Set<string>(RESERVED_OUTPUT_KEYS);
+  const schema: AttributeInfo[] = [];
+
+  for (const key of Object.keys(attrs)) {
+    const attr = attrs[key] ?? {};
+    const mapped = DYNAMIC_FIELD_MAP[key];
+    let outputKey = resolveAttributeKey(key, attr.label);
+
+    // Collision with an alias or an earlier field: fall back to the raw key,
+    // matching formatEmployeeData so the reported output_key is accurate.
+    if (outputKey !== key && taken.has(outputKey)) outputKey = key;
+    taken.add(outputKey);
+
+    const source: AttributeInfo['source'] = mapped
+      ? 'map'
+      : outputKey !== key
+        ? 'label'
+        : 'key';
+
+    schema.push({
+      key,
+      output_key: outputKey,
+      source,
+      label: typeof attr.label === 'string' && attr.label.trim() ? attr.label : null,
+      type: describeAttributeType(attr.value),
+    });
+  }
+
+  return schema;
+}
+
+/**
+ * Build a reverse index `output/friendly name -> raw Personio key(s)` from an
+ * attribute schema. Used to translate caller-supplied attribute names (resolved
+ * output names *or* raw keys) back to the raw keys the API filter expects.
+ */
+export function buildReverseAttributeIndex(schema: AttributeInfo[]): Map<string, string[]> {
+  const reverse = new Map<string, string[]>(Object.entries(FRIENDLY_ALIAS_REVERSE));
+  for (const { key, output_key } of schema) {
+    // A raw key always maps to itself; the resolved name maps back to the raw
+    // key. Friendly aliases above take precedence and are never overwritten.
+    if (!reverse.has(key)) reverse.set(key, [key]);
+    if (output_key !== key && !reverse.has(output_key)) reverse.set(output_key, [key]);
+  }
+  return reverse;
+}
 
 /**
  * Shape of a formatted employee. The named fields are the friendly aliases the
@@ -371,8 +557,16 @@ export class PersonioClient {
   private axiosInstance: AxiosInstance;
   private baseUrl: string;
 
+  // Tenant attribute schema, reused for both attribute discovery and
+  // request-side name translation. Cached as a promise (so concurrent callers
+  // share one in-flight fetch) together with its fetch time, so it can expire
+  // and be refreshed — see attributeCacheTtlMs / getAttributeSchema.
+  private attributeSchemaCache: { promise: Promise<AttributeInfo[]>; fetchedAt: number } | null = null;
+  private readonly attributeCacheTtlMs: number;
+
   constructor(config: PersonioClientConfig) {
     this.baseUrl = config.baseUrl || 'https://api.personio.de';
+    this.attributeCacheTtlMs = config.attributeCacheTtlMs ?? defaultAttributeCacheTtlMs();
     this.auth = new PersonioAuth(config);
     
     this.axiosInstance = axios.create({
@@ -449,6 +643,75 @@ export class PersonioClient {
 
     const response = await this.axiosInstance.get(`/v1/company/employees/${employeeId}?${queryParams}`);
     return response.data;
+  }
+
+  /**
+   * Tenant attribute schema (cached): for each attribute the credential's scope
+   * exposes, its raw key, the output name it is surfaced under, its source, label
+   * and value type. Sampled from one employee (labels are tenant-global); pass
+   * an `employeeId` to sample a specific one, otherwise the first listed employee
+   * is used.
+   *
+   * The result is memoized for `attributeCacheTtlMs`, then refetched on the next
+   * use so renamed labels and newly added custom fields are picked up by a
+   * long-running server. A TTL of `0` disables caching. Use
+   * `invalidateAttributeSchema` to force a refresh sooner.
+   */
+  async getAttributeSchema(employeeId?: number): Promise<AttributeInfo[]> {
+    const cached = this.attributeSchemaCache;
+    if (
+      cached &&
+      this.attributeCacheTtlMs > 0 &&
+      Date.now() - cached.fetchedAt < this.attributeCacheTtlMs
+    ) {
+      return cached.promise;
+    }
+
+    const promise = (async () => {
+      let attrs: Record<string, { label?: unknown; value?: unknown }> | undefined;
+      if (employeeId !== undefined) {
+        attrs = (await this.getEmployee(employeeId)).data?.attributes;
+      } else {
+        attrs = (await this.getEmployees({ limit: 1 })).data?.[0]?.attributes;
+      }
+      if (!attrs) {
+        throw new Error('Could not load attribute schema: no employee attributes returned');
+      }
+      return buildAttributeSchema(attrs);
+    })();
+
+    const entry = { promise, fetchedAt: Date.now() };
+    this.attributeSchemaCache = entry;
+    // Don't leave a rejected promise cached — let the next caller retry.
+    promise.catch(() => {
+      if (this.attributeSchemaCache === entry) this.attributeSchemaCache = null;
+    });
+    return promise;
+  }
+
+  /** Drop the cached attribute schema so the next access refetches it. */
+  invalidateAttributeSchema(): void {
+    this.attributeSchemaCache = null;
+  }
+
+  /**
+   * Translate caller-supplied attribute names — which may be resolved output
+   * names (`name`, `weekly_hours`, `kostenstelle_kurz`, `shoe_size`) or raw
+   * Personio keys — into the raw keys the API `attributes` filter expects.
+   * Unknown names pass through unchanged (assumed already raw). Loads the tenant
+   * schema (cached) only when given a non-empty list.
+   */
+  async resolveRequestedAttributes(names?: string[]): Promise<string[] | undefined> {
+    if (!names || names.length === 0) return names;
+
+    const reverse = buildReverseAttributeIndex(await this.getAttributeSchema());
+    const resolved: string[] = [];
+    for (const name of names) {
+      const rawKeys = reverse.get(name);
+      if (rawKeys) resolved.push(...rawKeys);
+      else resolved.push(name); // already a raw key, or unknown → pass through
+    }
+    return [...new Set(resolved)];
   }
 
   // Attendance endpoints
@@ -671,14 +934,24 @@ export class PersonioClient {
       weekly_hours: attrs.weekly_working_hours?.value,
     };
 
-    // Pass through every other attribute the scope returned. Rename known
-    // dynamic_<id> fields to a readable name via DYNAMIC_FIELD_MAP; all other
-    // attributes keep their original key. The `=== undefined` guard preserves
-    // legitimate falsy values (0, false, "") instead of dropping them, and
-    // never overwrites a friendly alias already set above.
+    // Pass through every other attribute the scope returned. Each key is
+    // resolved to a readable output name (explicit map > slugified dynamic_<id>
+    // label > raw key — see resolveAttributeKey). The `=== undefined` guard
+    // preserves legitimate falsy values (0, false, "") instead of dropping
+    // them, and never overwrites a friendly alias already set above.
     for (const key in attrs) {
-      const targetKey = DYNAMIC_FIELD_MAP[key] ?? key;
-      if (employeeData[targetKey] === undefined && attrs[key]?.value !== undefined) {
+      if (attrs[key]?.value === undefined) continue;
+
+      let targetKey = resolveAttributeKey(key, attrs[key]?.label);
+
+      // Collision: the resolved name is already taken (a friendly alias, or an
+      // earlier attribute whose label slugified to the same name). Fall back to
+      // the raw, guaranteed-unique key so the value is never silently dropped.
+      if (targetKey !== key && employeeData[targetKey] !== undefined) {
+        targetKey = key;
+      }
+
+      if (employeeData[targetKey] === undefined) {
         employeeData[targetKey] = attrs[key].value;
       }
     }

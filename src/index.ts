@@ -6,8 +6,10 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import {
   CallToolRequestSchema,
   ErrorCode,
+  ListResourcesRequestSchema,
   ListToolsRequestSchema,
   McpError,
+  ReadResourceRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { PersonioClient } from './api/personio-client.js';
 import {
@@ -22,6 +24,9 @@ import {
   RecruitingHandlers
 } from './handlers/index.js';
 import { toolDefinitions } from './tools/tool-definitions.js';
+
+// URI of the tenant attribute-schema resource (see setupResourceHandlers).
+const ATTRIBUTES_RESOURCE_URI = 'personio://employees/attributes';
 
 // Environment variables
 const CLIENT_ID = process.env.PERSONIO_CLIENT_ID;
@@ -53,6 +58,7 @@ class PersonioServer {
       {
         capabilities: {
           tools: {},
+          resources: {},
         },
       }
     );
@@ -74,7 +80,8 @@ class PersonioServer {
     this.recruitingHandlers = new RecruitingHandlers(this.personioClient);
 
     this.setupToolHandlers();
-    
+    this.setupResourceHandlers();
+
     // Error handling
     this.server.onerror = (error) => console.error('[MCP Error]', error);
     process.on('SIGINT', async () => {
@@ -100,7 +107,10 @@ class PersonioServer {
           
           case 'search_employees':
             return await this.employeeHandlers.handleSearchEmployees(request.params.arguments);
-          
+
+          case 'list_employee_attributes':
+            return await this.employeeHandlers.handleListEmployeeAttributes(request.params.arguments);
+
           // Attendance Tools
           case 'get_attendance_records':
             return await this.attendanceHandlers.handleGetAttendanceRecords(request.params.arguments);
@@ -241,6 +251,44 @@ class PersonioServer {
           isError: true,
         };
       }
+    });
+  }
+
+  private setupResourceHandlers() {
+    // The tenant attribute schema is stable reference data, so it is also
+    // exposed as a resource that clients can attach to context proactively —
+    // complementing the list_employee_attributes tool, which the model calls on
+    // demand. Both read from the same cached PersonioClient.getAttributeSchema().
+    this.server.setRequestHandler(ListResourcesRequestSchema, async () => ({
+      resources: [
+        {
+          uri: ATTRIBUTES_RESOURCE_URI,
+          name: 'Personio employee attributes',
+          description:
+            'Catalog of every employee attribute this Personio account exposes: ' +
+            'raw key, the output name it is surfaced under, that name\'s source, ' +
+            'label and value type. Tenant-global.',
+          mimeType: 'application/json',
+        },
+      ],
+    }));
+
+    this.server.setRequestHandler(ReadResourceRequestSchema, async (request: any) => {
+      const { uri } = request.params;
+      if (uri !== ATTRIBUTES_RESOURCE_URI) {
+        throw new McpError(ErrorCode.InvalidParams, `Unknown resource: ${uri}`);
+      }
+
+      const attributes = await this.personioClient.getAttributeSchema();
+      return {
+        contents: [
+          {
+            uri,
+            mimeType: 'application/json',
+            text: JSON.stringify({ attributes, count: attributes.length }, null, 2),
+          },
+        ],
+      };
     });
   }
 
