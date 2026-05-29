@@ -161,6 +161,55 @@ Claude will use the appropriate Personio MCP tools to fulfill your requests and 
 
 ## Available Tools
 
+### Pagination
+
+List tools use one of two pagination styles, and both honor their advertised
+contract. The guiding rule for style A is that pagination is applied **exactly
+once** per request — never both server-side and client-side.
+
+- **Offset/limit (style A)** — `limit`/`offset` parameters (Personio **v1**, plus
+  the v2 attendance-periods endpoint). Personio honors `offset`/`limit`
+  server-side on these endpoints, so:
+  - **Unfiltered requests** forward `offset`/`limit` to Personio and rely on its
+    server-side page. The client only *defensively clamps* the page down to
+    `limit` (in case an endpoint ever returns more) and **never re-applies
+    `offset`** — re-applying it would double the offset.
+  - **Filtered requests** (e.g. an `office` filter) fetch the **complete**
+    matching set, filter it client-side, then apply `offset`/`limit` **once** to
+    the filtered result.
+  - Responses include `count` (items returned this page), `total` (matching count
+    before slicing — Personio `metadata.total_elements` for unfiltered requests,
+    else the filtered count), and the effective `offset`/`limit`.
+- **Cursor (style B)** — `cursor`/`limit` parameters (Personio **v2**). The
+  server honors these and returns `next_cursor`; pass it back to fetch the next
+  page. These tools are **not** sliced client-side.
+- **`search_employees`** is a filtered case: its `limit` caps the number of
+  *returned results* (default 50), **not** the number of employees scanned. The
+  query is always evaluated against the **full** employee set (fetched via
+  `getAllEmployees`), then the matches are sliced once; `total` reports the full
+  match count.
+
+Per-endpoint audit (all style-A offset/limit endpoints are honored server-side
+and paginated exactly once):
+
+| Tool | Style | Honored server-side? | Enforcement |
+| --- | --- | --- | --- |
+| `list_employees` | offset/limit (v1) | Yes | server page (unfiltered) / slice once after filter (office) |
+| `search_employees` | results cap (v1) | n/a — full scan | full scan, then slice results once |
+| `get_attendance_records` | offset/limit (v1) | Yes | server page, defensive `limit` clamp |
+| `get_absences` | offset/limit (v1) | Yes | server page, defensive `limit` clamp |
+| `get_pending_approvals` | offset/limit (v1) | Yes | server page, defensive `limit` clamp |
+| `get_attendance_approval_status` | offset/limit (v1) | Yes | server page, defensive `limit` clamp |
+| `get_absence_approval_status` | offset/limit (v1) | Yes | server page, defensive `limit` clamp |
+| `get_attendance_periods_v2` | offset/limit (v2) | Yes | server page, defensive `limit` clamp |
+| `get_documents_by_category` | `employee_limit` (v1) | n/a | client-side cap (no `offset`) |
+| `generate_v1_v2_compatibility_report` | `limit` | n/a | client-side `limit` cap (no `offset`) |
+| `get_employee_documents` | cursor (v2) | Yes | passthrough (`_meta`) |
+| `list_recruiting_applications` | cursor (v2) | Yes | passthrough (`next_cursor`) |
+| `list_recruiting_candidates` | cursor (v2) | Yes | passthrough (`next_cursor`) |
+| `list_recruiting_jobs` | cursor (v2) | Yes | passthrough (`next_cursor`) |
+| `list_application_documents` | cursor (v2) | Yes | passthrough (`next_cursor`) |
+
 ### Employee Tools
 
 - `get_employee`: Get detailed information about a specific employee by ID

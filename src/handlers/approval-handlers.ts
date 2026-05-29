@@ -1,5 +1,11 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { PersonioClient } from '../api/personio-client.js';
+import { paginateStyleA } from '../utils/pagination.js';
+
+// Advertised bounds (mirror inputSchema): pending approvals default 50, the
+// approval-status tools default 100; all cap at 200.
+const PENDING_APPROVALS_BOUNDS = { defaultLimit: 50, maxLimit: 200 };
+const APPROVAL_STATUS_BOUNDS = { defaultLimit: 100, maxLimit: 200 };
 
 export class ApprovalHandlers {
   constructor(private personioClient: PersonioClient) {}
@@ -58,17 +64,29 @@ export class ApprovalHandlers {
       const response = await this.personioClient.getPendingApprovals({
         type: args?.type,
         employee_id: args?.employee_id,
-        limit: args?.limit || 50,
-        offset: args?.offset || 0,
+        limit: args?.limit,
+        offset: args?.offset,
       });
+
+      // Forwarded offset/limit are honored server-side; only defensively clamp
+      // `limit` here, never re-apply `offset`.
+      const { items: pendingApprovals, offset, limit, total } = paginateStyleA(
+        response.data,
+        { offset: args?.offset, limit: args?.limit },
+        PENDING_APPROVALS_BOUNDS,
+        { mode: 'server', total: response.metadata?.total_elements ?? response.data.length }
+      );
 
       return {
         content: [
           {
             type: 'text',
             text: JSON.stringify({
-              pending_approvals: response.data,
-              total: response.metadata?.total_elements || response.data.length,
+              pending_approvals: pendingApprovals,
+              count: pendingApprovals.length,
+              total,
+              offset,
+              limit,
               filters: {
                 type: args?.type,
                 employee_id: args?.employee_id,
@@ -110,10 +128,11 @@ export class ApprovalHandlers {
         start_date: args.start_date,
         end_date: args.end_date || args.start_date,
         employees: args.employee_id ? [args.employee_id] : undefined,
-        limit: args.limit || 100,
+        limit: args.limit,
+        offset: args.offset,
       });
 
-      const attendances = response.data.map(att => {
+      const allAttendances = response.data.map(att => {
         const formatted = this.personioClient.formatAttendanceData(att);
         return {
           ...formatted,
@@ -124,13 +143,25 @@ export class ApprovalHandlers {
         };
       });
 
+      // Forwarded offset/limit are honored server-side; only defensively clamp
+      // `limit` here, never re-apply `offset`.
+      const { items: attendances, offset, limit, total } = paginateStyleA(
+        allAttendances,
+        { offset: args.offset, limit: args.limit },
+        APPROVAL_STATUS_BOUNDS,
+        { mode: 'server', total: response.metadata?.total_elements ?? allAttendances.length }
+      );
+
       return {
         content: [
           {
             type: 'text',
             text: JSON.stringify({
               attendance_records: attendances,
-              total: attendances.length,
+              count: attendances.length,
+              total,
+              offset,
+              limit,
             }, null, 2),
           },
         ],
@@ -150,10 +181,11 @@ export class ApprovalHandlers {
         start_date: args.start_date,
         end_date: args.end_date || args.start_date,
         employees: args.employee_id ? [args.employee_id] : undefined,
-        limit: args.limit || 100,
+        limit: args.limit,
+        offset: args.offset,
       });
 
-      const absences = response.data.map(abs => {
+      const allAbsences = response.data.map(abs => {
         const formatted = this.personioClient.formatAbsenceData(abs);
         return {
           ...formatted,
@@ -164,7 +196,16 @@ export class ApprovalHandlers {
         };
       });
 
-      // Group by approval status
+      // Forwarded offset/limit are honored server-side; only defensively clamp
+      // `limit` here, never re-apply `offset`.
+      const { items: absences, offset, limit, total } = paginateStyleA(
+        allAbsences,
+        { offset: args.offset, limit: args.limit },
+        APPROVAL_STATUS_BOUNDS,
+        { mode: 'server', total: response.metadata?.total_elements ?? allAbsences.length }
+      );
+
+      // Group by approval status over the returned page.
       const summary = {
         total: absences.length,
         pending: absences.filter(a => a.is_pending).length,
@@ -179,7 +220,11 @@ export class ApprovalHandlers {
             type: 'text',
             text: JSON.stringify({
               absence_records: absences,
-            summary,
+              count: absences.length,
+              total,
+              offset,
+              limit,
+              summary,
             }, null, 2),
           },
         ],

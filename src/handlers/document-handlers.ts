@@ -1,5 +1,9 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { PersonioClient } from '../api/personio-client.js';
+import { applyOffsetLimit } from '../utils/pagination.js';
+
+// Advertised bounds for get_documents_by_category's employee_limit (inputSchema).
+const DOCUMENTS_BY_CATEGORY_BOUNDS = { defaultLimit: 100, maxLimit: 200 };
 
 export class DocumentHandlers {
   constructor(private personioClient: PersonioClient) {}
@@ -172,13 +176,21 @@ export class DocumentHandlers {
       throw new McpError(ErrorCode.InvalidParams, 'category_id is required');
     }
 
-    // Get all employees first, then get their documents for the specified category
+    // Get employees first, then their documents for the specified category.
+    // `employee_limit` caps how many employees we scan; forward it (harmless
+    // while the v1 endpoint ignores it) but enforce the cap client-side so the
+    // advertised limit is honored regardless of server behavior.
     const employeesResponse = await this.personioClient.getEmployees({
-      limit: args.employee_limit || 100,
+      limit: args.employee_limit,
     });
 
     const allDocuments: any[] = [];
-    const employees = employeesResponse.data.map(emp => this.personioClient.formatEmployeeData(emp));
+    const allEmployees = employeesResponse.data.map(emp => this.personioClient.formatEmployeeData(emp));
+    const { items: employees } = applyOffsetLimit(
+      allEmployees,
+      { limit: args.employee_limit },
+      DOCUMENTS_BY_CATEGORY_BOUNDS
+    );
 
     for (const employee of employees) {
       if (employee.id === undefined) continue;

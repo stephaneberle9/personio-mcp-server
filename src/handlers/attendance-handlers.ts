@@ -1,6 +1,10 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { PersonioClient } from '../api/personio-client.js';
 import { isValidAttendanceArgs, isValidReportArgs } from '../validators/index.js';
+import { paginateStyleA } from '../utils/pagination.js';
+
+// Advertised bounds for get_attendance_records (mirrors inputSchema).
+const ATTENDANCE_RECORDS_BOUNDS = { defaultLimit: 200, maxLimit: 200 };
 
 export class AttendanceHandlers {
   constructor(private personioClient: PersonioClient) {}
@@ -10,16 +14,26 @@ export class AttendanceHandlers {
       throw new McpError(ErrorCode.InvalidParams, 'Invalid attendance arguments');
     }
 
+    // No client-side filter: forward offset/limit and let Personio paginate
+    // server-side (it honors them). `paginateStyleA` only defensively clamps
+    // `limit` — it never re-applies `offset` (that was the double-application bug).
     const response = await this.personioClient.getAttendances({
       start_date: args?.start_date,
       end_date: args?.end_date,
       employees: args?.employee_ids,
-      limit: args?.limit || 200,
-      offset: args?.offset || 0,
+      limit: args?.limit,
+      offset: args?.offset,
     });
 
-    const formattedAttendances = response.data.map(att => 
+    const serverPage = response.data.map(att =>
       this.personioClient.formatAttendanceData(att)
+    );
+
+    const { items: formattedAttendances, offset, limit, total } = paginateStyleA(
+      serverPage,
+      { offset: args?.offset, limit: args?.limit },
+      ATTENDANCE_RECORDS_BOUNDS,
+      { mode: 'server', total: response.metadata?.total_elements ?? serverPage.length }
     );
 
     return {
@@ -28,7 +42,10 @@ export class AttendanceHandlers {
           type: 'text',
           text: JSON.stringify({
             attendance_records: formattedAttendances,
-            total: response.metadata?.total_elements || formattedAttendances.length,
+            count: formattedAttendances.length,
+            total,
+            offset,
+            limit,
             filters: {
               start_date: args?.start_date,
               end_date: args?.end_date,

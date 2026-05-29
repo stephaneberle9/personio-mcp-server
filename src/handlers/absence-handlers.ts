@@ -1,6 +1,10 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { PersonioClient } from '../api/personio-client.js';
 import { isValidAbsenceArgs, isValidBalanceArgs, isValidReportArgs } from '../validators/index.js';
+import { paginateStyleA } from '../utils/pagination.js';
+
+// Advertised bounds for get_absences (mirrors inputSchema).
+const ABSENCES_BOUNDS = { defaultLimit: 200, maxLimit: 200 };
 
 export class AbsenceHandlers {
   constructor(private personioClient: PersonioClient) {}
@@ -10,16 +14,26 @@ export class AbsenceHandlers {
       throw new McpError(ErrorCode.InvalidParams, 'Invalid absence arguments');
     }
 
+    // No client-side filter: forward offset/limit and let Personio paginate
+    // server-side (it honors them). `paginateStyleA` only defensively clamps
+    // `limit` — it never re-applies `offset` (that was the double-application bug).
     const response = await this.personioClient.getAbsences({
       start_date: args?.start_date,
       end_date: args?.end_date,
       employees: args?.employee_ids,
-      limit: args?.limit || 200,
-      offset: args?.offset || 0,
+      limit: args?.limit,
+      offset: args?.offset,
     });
 
-    const formattedAbsences = response.data.map(abs => 
+    const serverPage = response.data.map(abs =>
       this.personioClient.formatAbsenceData(abs)
+    );
+
+    const { items: formattedAbsences, offset, limit, total } = paginateStyleA(
+      serverPage,
+      { offset: args?.offset, limit: args?.limit },
+      ABSENCES_BOUNDS,
+      { mode: 'server', total: response.metadata?.total_elements ?? serverPage.length }
     );
 
     return {
@@ -28,7 +42,10 @@ export class AbsenceHandlers {
           type: 'text',
           text: JSON.stringify({
             absences: formattedAbsences,
-            total: response.metadata?.total_elements || formattedAbsences.length,
+            count: formattedAbsences.length,
+            total,
+            offset,
+            limit,
             filters: {
               start_date: args?.start_date,
               end_date: args?.end_date,

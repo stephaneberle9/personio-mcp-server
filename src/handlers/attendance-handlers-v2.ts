@@ -1,5 +1,11 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { PersonioClient } from '../api/personio-client.js';
+import { applyOffsetLimit, paginateStyleA } from '../utils/pagination.js';
+
+// Advertised bounds for get_attendance_periods_v2 (mirrors inputSchema).
+const ATTENDANCE_PERIODS_V2_BOUNDS = { defaultLimit: 200, maxLimit: 200 };
+// generate_v1_v2_compatibility_report `limit` (mirrors inputSchema, default 50).
+const COMPATIBILITY_REPORT_BOUNDS = { defaultLimit: 50, maxLimit: 200 };
 
 export class AttendanceHandlersV2 {
   constructor(private personioClient: PersonioClient) {}
@@ -10,13 +16,22 @@ export class AttendanceHandlersV2 {
         person_id: args?.person_id,
         start_date_time: args?.start_date_time,
         end_date_time: args?.end_date_time,
-        limit: args?.limit || 200,
-        offset: args?.offset || 0,
+        limit: args?.limit,
+        offset: args?.offset,
       });
 
-      const formattedAttendances = Array.isArray(response.data)
+      const allFormatted = Array.isArray(response.data)
         ? response.data.map(att => this.personioClient.formatAttendanceDataV2(att))
         : [];
+
+      // Forwarded offset/limit are honored server-side; only defensively clamp
+      // `limit` here, never re-apply `offset`.
+      const { items: formattedAttendances, offset, limit, total } = paginateStyleA(
+        allFormatted,
+        { offset: args?.offset, limit: args?.limit },
+        ATTENDANCE_PERIODS_V2_BOUNDS,
+        { mode: 'server', total: response.meta?.pagination?.total_count ?? allFormatted.length }
+      );
 
       return {
         content: [
@@ -25,7 +40,10 @@ export class AttendanceHandlersV2 {
             text: JSON.stringify({
               api_version: 'v2',
               attendance_periods: formattedAttendances,
-              total: response.meta?.pagination?.total_count || formattedAttendances.length,
+              count: formattedAttendances.length,
+              total,
+              offset,
+              limit,
               pagination: response.meta?.pagination,
               filters: {
                 person_id: args?.person_id,
@@ -325,7 +343,20 @@ export class AttendanceHandlersV2 {
       }
 
       const v1Response = await v1Promise;
-      const v1Data = v1Response.data;
+
+      // Enforce `limit` client-side on both sides (the v1/v2 endpoints do not
+      // reliably cap server-side), so the report compares at most `limit` records.
+      const { items: v1Data, limit } = applyOffsetLimit(
+        v1Response.data,
+        { limit: args.limit },
+        COMPATIBILITY_REPORT_BOUNDS
+      );
+      const v2List = Array.isArray(v2Data) ? v2Data : [];
+      const { items: v2Sliced } = applyOffsetLimit(
+        v2List,
+        { limit: args.limit },
+        COMPATIBILITY_REPORT_BOUNDS
+      );
 
       return {
         content: [
@@ -333,6 +364,7 @@ export class AttendanceHandlersV2 {
             type: 'text',
             text: JSON.stringify({
               compatibility_report: {
+                compared_limit: limit,
                 v1_api: {
                   available: true,
                   records_count: v1Data.length,
@@ -341,8 +373,8 @@ export class AttendanceHandlersV2 {
                 v2_api: {
                   available: v2Error === null,
                   error: v2Error,
-                  records_count: v2Data ? (Array.isArray(v2Data) ? v2Data.length : 0) : 0,
-                  sample_record: v2Data && Array.isArray(v2Data) && v2Data[0] ? this.personioClient.formatAttendanceDataV2(v2Data[0]) : null,
+                  records_count: v2Sliced.length,
+                  sample_record: v2Sliced[0] ? this.personioClient.formatAttendanceDataV2(v2Sliced[0]) : null,
                 },
                 compatibility_notes: [
                   'V1 API uses date + separate time fields, V2 API uses ISO 8601 datetime format',

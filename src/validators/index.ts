@@ -16,6 +16,7 @@ export interface EmployeesArgs {
 export interface SearchArgs {
   query: string;
   limit?: number;
+  offset?: number;
 }
 
 export interface AttendanceArgs {
@@ -64,7 +65,8 @@ export const isValidSearchArgs = (args: any): args is SearchArgs =>
   typeof args === 'object' &&
   args !== null &&
   typeof args.query === 'string' &&
-  (args.limit === undefined || typeof args.limit === 'number');
+  (args.limit === undefined || typeof args.limit === 'number') &&
+  (args.offset === undefined || typeof args.offset === 'number');
 
 export const isValidAttendanceArgs = (args: any): args is AttendanceArgs =>
   typeof args === 'object' &&

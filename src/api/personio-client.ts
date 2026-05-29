@@ -633,6 +633,94 @@ export class PersonioClient {
     return response.data;
   }
 
+  /**
+   * Fetch the COMPLETE employee set, paging through the v1 endpoint until it is
+   * exhausted. Needed wherever a query must run across every employee rather than
+   * a single server page — `search_employees`, and `list_employees` when an
+   * `office` filter is in play (see `EmployeeHandlers`).
+   *
+   * Paging always runs over the RAW (unfiltered) set: the `office` filter is
+   * applied to the fully-collected result at the end, never page-by-page. This
+   * matters because a client-side filter shrinks each page, so terminating on a
+   * "short page" would stop early and miss matches beyond the first page. By
+   * paging raw, the short-page/total termination conditions see the API's true
+   * page sizes.
+   *
+   * Robust to the endpoint's pagination behavior either way: if `offset` is
+   * honored, successive pages accumulate normally; if it is ignored (the endpoint
+   * returns the full set every call), de-duplication by employee id means the
+   * second page adds nothing and the loop terminates. A short/empty page or
+   * reaching `metadata.total_elements` also stops it, and a hard iteration cap
+   * guards against an unexpected non-terminating API.
+   */
+  async getAllEmployees(params?: {
+    attributes?: string[];
+    office?: string;
+    pageSize?: number;
+  }): Promise<PersonioApiResponse<Employee[]>> {
+    const pageSize = params?.pageSize && params.pageSize > 0 ? Math.floor(params.pageSize) : 200;
+    const all: Employee[] = [];
+    const seen = new Set<number>();
+    let offset = 0;
+    let total: number | undefined;
+
+    // Hard cap: pageSize * 1000 records is far beyond any realistic tenant, so
+    // this only ever trips if the API neither paginates nor lets us de-dup.
+    for (let page = 0; page < 1000; page++) {
+      // No `office` here: page over the raw set so termination uses the API's
+      // true page sizes (see the doc comment). The filter is applied below.
+      const response = await this.getEmployees({
+        limit: pageSize,
+        offset,
+        attributes: params?.attributes,
+      });
+
+      const batch = response.data ?? [];
+      if (response.metadata?.total_elements !== undefined) {
+        total = response.metadata.total_elements;
+      }
+      if (batch.length === 0) break;
+
+      let added = 0;
+      for (const employee of batch) {
+        const id = employee.attributes?.id?.value;
+        if (typeof id === 'number') {
+          if (seen.has(id)) continue;
+          seen.add(id);
+        }
+        all.push(employee);
+        added++;
+      }
+
+      // No new records (offset ignored → same page returned) ends paging.
+      if (added === 0) break;
+      // A short page is the last page.
+      if (batch.length < pageSize) break;
+      // Reached the API-reported total.
+      if (total !== undefined && all.length >= total) break;
+
+      offset += pageSize;
+    }
+
+    // Apply the office filter to the COMPLETE set, so callers receive the full
+    // matching set rather than a partially-paged one.
+    let data = all;
+    if (params?.office) {
+      const office = params.office.toLowerCase();
+      data = all.filter(
+        employee => employee.attributes.office?.value?.attributes?.name?.toLowerCase().includes(office)
+      );
+    }
+
+    return {
+      success: true,
+      data,
+      // Without an office filter the API total is authoritative; with one, the
+      // filtered length is the true matching count.
+      metadata: { total_elements: params?.office ? data.length : total ?? data.length },
+    };
+  }
+
   async getEmployee(employeeId: number, attributes?: string[]): Promise<PersonioApiResponse<Employee>> {
     const queryParams = new URLSearchParams();
     if (attributes) {

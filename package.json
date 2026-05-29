@@ -25,7 +25,7 @@
     "start": "node build/index.js",
     "attributes": "node print-attributes.mjs",
     "test": "node test-smoke.mjs",
-    "test:unit": "node --test test-format-employee.mjs test-attribute-schema.mjs"
+    "test:unit": "node --test test-format-employee.mjs test-attribute-schema.mjs test-pagination.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.27.1",

@@ -49,7 +49,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of dropping them, and is now typed via a `FormattedEmployee`
   interface (known fields plus an index signature) instead of `any`.
 
+### Fixed
+- **List tools now apply offset/limit pagination exactly once.** The "style A"
+  offset/limit list tools advertise `limit`/`offset`, and Personio honors them
+  server-side. A prior change both forwarded those parameters *and* re-sliced the
+  result client-side by the same offset/limit, double-applying the offset — e.g.
+  `list_employees` with `offset=5,limit=5` returned an empty page, and
+  `offset=3,limit=5` returned the records at absolute indices 6–7 (offset applied
+  as 3+3); `limit` alone only looked correct because re-slicing a `limit`-sized
+  page by `[0:limit]` is a no-op. Pagination is now applied a single time, via a
+  shared `paginateStyleA` helper (`src/utils/pagination.ts`) that centralizes the
+  filtered-vs-unfiltered decision:
+  - **Unfiltered requests** forward `offset`/`limit` to Personio and use its
+    server-side page; the client only defensively clamps the page down to `limit`
+    and never re-applies `offset`.
+  - **Filtered requests** (e.g. `list_employees` with an `office` filter) fetch
+    the complete matching set, filter it, then slice once.
+
+  Affected tools: `list_employees`, `get_attendance_records`, `get_absences`,
+  `get_pending_approvals`, `get_attendance_approval_status`,
+  `get_absence_approval_status`, and `get_attendance_periods_v2` (v2
+  offset/limit). `limit`/`offset` are still clamped to each tool's documented
+  bounds.
+- **`getAllEmployees` no longer terminates a filtered full-fetch early.** It now
+  pages over the raw (unfiltered) set — so the short-page/total termination
+  conditions see the API's true page sizes — and applies the `office` filter to
+  the fully-collected result. Previously, filtering page-by-page could stop after
+  the first page and miss matches beyond it.
+- **`search_employees` scans the full employee set.** Its `limit` caps the number
+  of *returned results* (default 50), not the number of employees scanned. It
+  fetches every employee (`PersonioClient.getAllEmployees`, which pages
+  defensively and de-duplicates), filters across the full set, then slices the
+  matches once. The response reports `count` (results this page) and `total` (all
+  matches before slicing).
+- **`get_documents_by_category`** enforces its `employee_limit` (employees
+  scanned) client-side; **`generate_v1_v2_compatibility_report`** enforces its
+  `limit` on both record sets it compares. Both apply a `limit`-only cap (no
+  `offset`), so neither was affected by the double-application.
+- Style-A responses include consistent metadata: `count` (items returned this
+  page), `total` (matching count before slicing — Personio
+  `metadata.total_elements` for unfiltered requests, else the filtered count),
+  and the effective `offset`/`limit`. CSV and JSON output for `list_employees`
+  return the same sliced set.
+
 ### Notes
+- **Cursor-based ("style B") tools are unchanged.** The v2 recruiting tools
+  (`list_recruiting_applications`, `list_recruiting_candidates`,
+  `list_recruiting_jobs`, `list_application_documents`) and
+  `get_employee_documents` use cursor pagination, which Personio v2 honors
+  server-side. They forward `cursor`/`limit` and surface `next_cursor` verbatim;
+  they are deliberately **not** client-side sliced, so the cursor contract is
+  never corrupted.
+- Per-endpoint pagination audit (style, whether the parameter is honored
+  server-side, and the action taken) is summarized in the README under
+  *Pagination*.
 - The returned fields depend entirely on the API credential's readable-attributes
   scope. Compensation is one example: to retrieve a salary field add its key to
   `attributes` (and map its `dynamic_<id>` if it is a custom field). Personio
