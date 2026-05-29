@@ -181,6 +181,7 @@ export class DocumentHandlers {
     const employees = employeesResponse.data.map(emp => this.personioClient.formatEmployeeData(emp));
 
     for (const employee of employees) {
+      if (employee.id === undefined) continue;
       try {
         const documentsResponse = await this.personioClient.getEmployeeDocuments(employee.id, {
           category_id: args.category_id.toString(),

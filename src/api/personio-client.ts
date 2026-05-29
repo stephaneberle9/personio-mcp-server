@@ -5,6 +5,74 @@ export interface PersonioClientConfig extends PersonioAuthConfig {
   baseUrl?: string;
 }
 
+/**
+ * Default mapping from Personio dynamic attribute IDs (`dynamic_<id>`) to
+ * human-readable field names. Personio exposes custom fields under opaque
+ * `dynamic_<id>` keys; this map lets the server surface them under a friendly
+ * name instead. Tenant-specific IDs differ between Personio accounts, so this
+ * is only a small set of sensible defaults.
+ *
+ * Extend or override it at runtime — without a code change — via the
+ * `PERSONIO_DYNAMIC_FIELD_MAP` environment variable, which must contain a JSON
+ * object of `{ "dynamic_<id>": "readable_name" }`. Entries from the env var are
+ * merged on top of these defaults (env values win on key collisions).
+ *
+ * Use the `print-attributes` helper script to discover which `dynamic_<id>`
+ * keys a given tenant actually exposes.
+ */
+const DEFAULT_DYNAMIC_FIELD_MAP: Record<string, string> = {
+  dynamic_14285869: 'shoe_size',
+};
+
+function loadDynamicFieldMap(): Record<string, string> {
+  const raw = process.env.PERSONIO_DYNAMIC_FIELD_MAP;
+  if (!raw) {
+    return { ...DEFAULT_DYNAMIC_FIELD_MAP };
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('expected a JSON object');
+    }
+    return { ...DEFAULT_DYNAMIC_FIELD_MAP, ...(parsed as Record<string, string>) };
+  } catch (error) {
+    // Log to stderr (stdout is reserved for the MCP protocol) and fall back to
+    // the defaults rather than crashing the server on a malformed env var.
+    console.error(
+      `Invalid PERSONIO_DYNAMIC_FIELD_MAP (expected a JSON object of dynamic_<id> -> name): ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+    return { ...DEFAULT_DYNAMIC_FIELD_MAP };
+  }
+}
+
+/**
+ * Active dynamic-field mapping, resolved once at module load from the defaults
+ * plus any `PERSONIO_DYNAMIC_FIELD_MAP` override.
+ */
+export const DYNAMIC_FIELD_MAP: Record<string, string> = loadDynamicFieldMap();
+
+/**
+ * Shape of a formatted employee. The named fields are the friendly aliases the
+ * server always derives; the index signature allows every additional attribute
+ * the API scope returns (including mapped `dynamic_<id>` fields) to pass through
+ * under its own key without falling back to `any`.
+ */
+export interface FormattedEmployee {
+  id?: number;
+  name?: string;
+  email?: string;
+  position?: string;
+  department?: string | null;
+  office?: string | null;
+  status?: string;
+  hire_date?: string;
+  weekly_hours?: string;
+  [key: string]: unknown;
+}
+
 export interface PersonioApiResponse<T = any> {
   success: boolean;
   data: T;
@@ -571,12 +639,15 @@ export class PersonioClient {
     }
   }
 
-  // Helper method to format employee data for display
-  formatEmployeeData(employee: Employee): any {
+  // Helper method to format employee data for display.
+  // Surfaces every attribute the API scope returns: known fields get friendly
+  // aliases, and any remaining attribute passes through under its own key
+  // (with dynamic_<id> fields renamed via DYNAMIC_FIELD_MAP where configured).
+  formatEmployeeData(employee: Employee): FormattedEmployee {
     const attrs = employee.attributes;
 
     // Extract department name from nested object or use string value
-    let departmentName = null;
+    let departmentName: string | null = null;
     if (attrs.department?.value) {
       if (typeof attrs.department.value === 'object' && attrs.department.value.attributes) {
         departmentName = attrs.department.value.attributes.name;
@@ -584,7 +655,8 @@ export class PersonioClient {
         departmentName = attrs.department.value;
       }
     }
-    const employeeData: any = {
+
+    const employeeData: FormattedEmployee = {
       id: attrs.id?.value,
       name: `${attrs.first_name?.value || ''} ${attrs.last_name?.value || ''}`.trim(),
       email: attrs.email?.value,
@@ -594,12 +666,17 @@ export class PersonioClient {
       status: attrs.status?.value,
       hire_date: attrs.hire_date?.value,
       weekly_hours: attrs.weekly_working_hours?.value,
-      shoe_size: attrs.dynamic_14285869?.value || null,
     };
 
-    for(let key in attrs) {
-      if (!employeeData[key] && attrs[key]?.value) {
-        employeeData[key] = attrs[key].value;
+    // Pass through every other attribute the scope returned. Rename known
+    // dynamic_<id> fields to a readable name via DYNAMIC_FIELD_MAP; all other
+    // attributes keep their original key. The `=== undefined` guard preserves
+    // legitimate falsy values (0, false, "") instead of dropping them, and
+    // never overwrites a friendly alias already set above.
+    for (const key in attrs) {
+      const targetKey = DYNAMIC_FIELD_MAP[key] ?? key;
+      if (employeeData[targetKey] === undefined && attrs[key]?.value !== undefined) {
+        employeeData[targetKey] = attrs[key].value;
       }
     }
 
