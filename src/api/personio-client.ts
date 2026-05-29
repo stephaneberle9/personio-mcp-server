@@ -545,7 +545,10 @@ export class PersonioClient {
     if (typeof params.file === 'string') {
       formData.append('file', params.file);
     } else {
-      const blob = new Blob([params.file]);
+      // Wrap in a Uint8Array view so the Blob part type is a concrete
+      // ArrayBuffer-backed view (newer @types/node no longer accept a bare
+      // Buffer, whose backing buffer may be a SharedArrayBuffer, as a BlobPart).
+      const blob = new Blob([new Uint8Array(params.file)]);
       formData.append('file', blob, params.file_name);
     }
 
