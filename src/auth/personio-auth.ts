@@ -51,6 +51,10 @@ export class PersonioAuth {
       }
 
       // V1 authentication (original method)
+      // IMPORTANT: credentials MUST go in the request body, never the query string.
+      // Personio deprecates POST /v1/auth?client_id=...&client_secret=... → 403 from 2026-12-01.
+      // Passing an object as the axios body serializes it as JSON (Content-Type: application/json),
+      // which is the compliant form. Do NOT move these into the URL/query params.
       const response = await this.axiosInstance.post('/v1/auth', {
         client_id: this.config.clientId,
         client_secret: this.config.clientSecret,
