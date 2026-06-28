@@ -2,6 +2,7 @@ import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { PersonioClient } from '../api/personio-client.js';
 import { isValidAttendanceArgs, isValidReportArgs } from '../validators/index.js';
 import { paginateStyleA } from '../utils/pagination.js';
+import { isForbiddenError, accessDeniedResult } from '../utils/scope-hints.js';
 
 // Advertised bounds for get_attendance_records (mirrors inputSchema).
 const ATTENDANCE_RECORDS_BOUNDS = { defaultLimit: 200, maxLimit: 200 };
@@ -104,14 +105,22 @@ export class AttendanceHandlers {
       throw new McpError(ErrorCode.InvalidParams, 'Invalid report arguments');
     }
 
-    const [attendanceResponse, employeesResponse] = await Promise.all([
+    // Reads Attendances + Employees; disambiguate a 403 across both areas.
+    const fetched = await Promise.all([
       this.personioClient.getAttendances({
         start_date: args.start_date,
         end_date: args.end_date,
         employees: args.employee_ids,
       }),
       this.personioClient.getEmployees(),
-    ]);
+    ]).catch((error) => {
+      if (isForbiddenError(error)) {
+        return accessDeniedResult('generate attendance report', error, ['attendances', 'employees']);
+      }
+      throw error;
+    });
+    if ('isError' in fetched) return fetched;
+    const [attendanceResponse, employeesResponse] = fetched;
 
     const attendances = attendanceResponse.data.map(att => 
       this.personioClient.formatAttendanceData(att)

@@ -1,4 +1,5 @@
 import { PersonioClient } from '../api/personio-client.js';
+import { isForbiddenError, accessDeniedResult } from '../utils/scope-hints.js';
 
 export class AnalyticsHandlers {
   constructor(private personioClient: PersonioClient) {}
@@ -6,7 +7,9 @@ export class AnalyticsHandlers {
   async handleGetTeamAvailability(args: any) {
     const today = new Date().toISOString().split('T')[0];
 
-    const [attendanceResponse, absenceResponse, employeesResponse] = await Promise.all([
+    // This tool reads across three access areas, so a 403 is ambiguous on its
+    // own — name all three in the hint instead of a bare "access denied".
+    const fetched = await Promise.all([
       this.personioClient.getAttendances({
         start_date: today,
         end_date: today,
@@ -16,7 +19,14 @@ export class AnalyticsHandlers {
         end_date: today,
       }),
       this.personioClient.getEmployees(),
-    ]);
+    ]).catch((error) => {
+      if (isForbiddenError(error)) {
+        return accessDeniedResult('get team availability', error, ['attendances', 'absences', 'employees']);
+      }
+      throw error;
+    });
+    if ('isError' in fetched) return fetched;
+    const [attendanceResponse, absenceResponse, employeesResponse] = fetched;
 
     const attendances = attendanceResponse.data.map(att => 
       this.personioClient.formatAttendanceData(att)

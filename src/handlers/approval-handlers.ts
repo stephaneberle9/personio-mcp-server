@@ -1,6 +1,7 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { PersonioClient } from '../api/personio-client.js';
 import { paginateStyleA } from '../utils/pagination.js';
+import { isForbiddenError, accessDeniedResult } from '../utils/scope-hints.js';
 
 // Advertised bounds (mirror inputSchema): pending approvals default 50, the
 // approval-status tools default 100; all cap at 200.
@@ -304,6 +305,10 @@ export class ApprovalHandlers {
         ],
       };
     } catch (error) {
+      if (isForbiddenError(error)) {
+        // Reads Attendances + Absences; disambiguate a 403 across both areas.
+        return accessDeniedResult('get approval workflow summary', error, ['attendances', 'absences']);
+      }
       throw new McpError(ErrorCode.InternalError, `Failed to get approval workflow summary: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }

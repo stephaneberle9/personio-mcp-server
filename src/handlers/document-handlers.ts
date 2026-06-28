@@ -1,6 +1,7 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { PersonioClient } from '../api/personio-client.js';
 import { applyOffsetLimit } from '../utils/pagination.js';
+import { isForbiddenError, accessDeniedResult } from '../utils/scope-hints.js';
 
 // Advertised bounds for get_documents_by_category's employee_limit (inputSchema).
 const DOCUMENTS_BY_CATEGORY_BOUNDS = { defaultLimit: 100, maxLimit: 200 };
@@ -61,17 +62,8 @@ export class DocumentHandlers {
         ],
       };
     } catch (error: any) {
-      if (error?.response?.status === 403) {
-        return {
-          content: [{
-            type: 'text',
-            text: JSON.stringify({
-              error: 'Access denied to Document Management API. Ensure your API credentials have the document management scope.',
-              employee_id: args.employee_id,
-            }, null, 2),
-          }],
-          isError: true,
-        };
+      if (isForbiddenError(error)) {
+        return accessDeniedResult('get employee documents', error, ['documents']);
       }
       throw new McpError(ErrorCode.InternalError, `Failed to get employee documents: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -114,6 +106,9 @@ export class DocumentHandlers {
         ],
       };
     } catch (error) {
+      if (isForbiddenError(error)) {
+        return accessDeniedResult('upload document', error, ['documents'], 'write');
+      }
       throw new McpError(ErrorCode.InternalError, `Failed to upload document: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
@@ -142,6 +137,9 @@ export class DocumentHandlers {
         ],
       };
     } catch (error) {
+      if (isForbiddenError(error)) {
+        return accessDeniedResult('download document', error, ['documents']);
+      }
       throw new McpError(ErrorCode.InternalError, `Failed to download document: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
@@ -167,6 +165,9 @@ export class DocumentHandlers {
         ],
       };
     } catch (error) {
+      if (isForbiddenError(error)) {
+        return accessDeniedResult('delete document', error, ['documents'], 'write');
+      }
       throw new McpError(ErrorCode.InternalError, `Failed to delete document: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
@@ -209,7 +210,14 @@ export class DocumentHandlers {
 
         allDocuments.push(...employeeDocuments);
       } catch (error) {
-        // Continue with other employees if one fails
+        if (isForbiddenError(error)) {
+          // A 403 here is a credential-wide Documents access problem, not
+          // specific to this employee — surface it instead of silently
+          // returning an empty result set.
+          return accessDeniedResult('get documents by category', error, ['documents']);
+        }
+        // Other per-employee errors (e.g. 404 for employees without documents)
+        // are expected; continue scanning.
         console.error(`Failed to get documents for employee ${employee.id}:`, error);
       }
     }

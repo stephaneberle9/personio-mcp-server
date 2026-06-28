@@ -2,6 +2,7 @@ import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { PersonioClient } from '../api/personio-client.js';
 import { isValidAbsenceArgs, isValidBalanceArgs, isValidReportArgs } from '../validators/index.js';
 import { paginateStyleA } from '../utils/pagination.js';
+import { isForbiddenError, accessDeniedResult } from '../utils/scope-hints.js';
 
 // Advertised bounds for get_absences (mirrors inputSchema).
 const ABSENCES_BOUNDS = { defaultLimit: 200, maxLimit: 200 };
@@ -142,13 +143,21 @@ export class AbsenceHandlers {
       throw new McpError(ErrorCode.InvalidParams, 'Invalid statistics arguments');
     }
 
-    const [absenceResponse, employeesResponse] = await Promise.all([
+    // Reads Absences + Employees; disambiguate a 403 across both areas.
+    const fetched = await Promise.all([
       this.personioClient.getAbsences({
         start_date: args.start_date,
         end_date: args.end_date,
       }),
       this.personioClient.getEmployees(),
-    ]);
+    ]).catch((error) => {
+      if (isForbiddenError(error)) {
+        return accessDeniedResult('get absence statistics', error, ['absences', 'employees']);
+      }
+      throw error;
+    });
+    if ('isError' in fetched) return fetched;
+    const [absenceResponse, employeesResponse] = fetched;
 
     const absences = absenceResponse.data.map(abs => 
       this.personioClient.formatAbsenceData(abs)

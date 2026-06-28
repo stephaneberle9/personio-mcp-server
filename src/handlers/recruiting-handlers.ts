@@ -1,5 +1,6 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { PersonioClient } from '../api/personio-client.js';
+import { isForbiddenError, accessDeniedResult, AccessArea } from '../utils/scope-hints.js';
 
 export class RecruitingHandlers {
   constructor(private personioClient: PersonioClient) {}
@@ -273,21 +274,13 @@ export class RecruitingHandlers {
   private handleRecruitingError(error: unknown, operation: string) {
     const message = error instanceof Error ? error.message : 'Unknown error';
 
-    if (message.includes('access denied') || message.includes('403')) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({
-              error: `Failed to ${operation}`,
-              message,
-              hint: 'Ensure your Personio API credentials include the "personio:recruiting:read" scope. ' +
-                    'You may need to regenerate your API credentials with recruiting permissions enabled.',
-            }, null, 2),
-          },
-        ],
-        isError: true,
-      };
+    if (isForbiddenError(error)) {
+      // The document tools (list/download application documents) call the
+      // Document Management API, NOT the Recruiting API, so a 403 there means the
+      // credential lacks "Documents" access — recruiting access does not cover
+      // it. Route the hint to the access area the failing endpoint really needs.
+      const areas: AccessArea[] = operation.includes('document') ? ['documents'] : ['recruiting'];
+      return accessDeniedResult(operation, error, areas);
     }
 
     return {
