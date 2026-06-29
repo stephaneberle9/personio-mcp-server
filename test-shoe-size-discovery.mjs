@@ -3,19 +3,13 @@
 // Test script to discover shoe size attribute in Personio API
 // Run this with: node test-shoe-size-discovery.mjs
 
-import 'dotenv/config';
 import { PersonioClient } from './build/api/personio-client.js';
+import { loadPersonioCredentials } from './test-credentials.mjs';
+import { looksForbidden } from './test-helpers.mjs';
 
-console.log('🔍 Discovering Shoe Size Attributes in Personio API\n');
+console.log('\n🔍 Discovering Shoe Size Attributes in Personio API\n');
 
-const CLIENT_ID = process.env.PERSONIO_CLIENT_ID;
-const CLIENT_SECRET = process.env.PERSONIO_CLIENT_SECRET;
-
-if (!CLIENT_ID || !CLIENT_SECRET) {
-  console.log('❌ Missing environment variables');
-  console.log('   Please set PERSONIO_CLIENT_ID and PERSONIO_CLIENT_SECRET');
-  process.exit(1);
-}
+const { clientId: CLIENT_ID, clientSecret: CLIENT_SECRET } = loadPersonioCredentials(process.argv[2]);
 
 async function discoverShoeSize() {
   try {
@@ -140,6 +134,10 @@ async function discoverShoeSize() {
     console.log('='.repeat(70));
 
   } catch (error) {
+    if (looksForbidden(error.message)) {
+      console.log('○ Skipped — credential lacks the "Employees (Mitarbeitenden)" access right (403/forbidden)');
+      return;
+    }
     console.log('❌ Discovery failed:', error.message);
     if (error.stack) {
       console.log('\nStack trace:', error.stack);

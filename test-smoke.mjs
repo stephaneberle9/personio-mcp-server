@@ -4,11 +4,12 @@
  * READ-ONLY tests — no create/update/delete operations.
  * Runs against the live Personio API using compiled handlers.
  *
- * Usage: npm run build && npm test
+ * Usage: npm run build && node test-smoke.mjs [name]   (or: npm run test:e2e)
  */
 
-import 'dotenv/config';
 import { PersonioClient } from './build/api/personio-client.js';
+import { loadPersonioCredentials } from './test-credentials.mjs';
+import { looksForbidden } from './test-helpers.mjs';
 import {
   EmployeeHandlers,
   AttendanceHandlers,
@@ -26,9 +27,10 @@ import {
 const results = { pass: 0, fail: 0, skip: 0 };
 let currentGroup = '';
 
-function group(name) {
+function group(name, requires) {
   currentGroup = name;
-  console.log(`\n── ${name} ${'─'.repeat(Math.max(0, 58 - name.length))}`);
+  const label = requires ? `${name}  ·  requires: ${requires}` : name;
+  console.log(`\n── ${label} ${'─'.repeat(Math.max(0, 58 - label.length))}`);
 }
 
 async function test(name, fn) {
@@ -37,6 +39,13 @@ async function test(name, fn) {
     results.pass++;
     console.log(`  ✓ ${name}`);
   } catch (err) {
+    // A missing-scope (403/forbidden) error is tolerated, not a real failure:
+    // the endpoint is reachable, the credential just lacks that access right.
+    if (looksForbidden(err.message)) {
+      results.skip++;
+      console.log(`  ○ ${name} — skipped (missing permission)`);
+      return;
+    }
     results.fail++;
     console.log(`  ✗ ${name}`);
     console.log(`    ${err.message}`);
@@ -54,6 +63,12 @@ function assert(condition, message) {
 
 /** Parse the JSON text from an MCP handler result */
 function parseResult(result) {
+  // A forbidden / missing-scope result is tolerated by the runner (skipped),
+  // not a real failure — surface it as a forbidden error for test() to catch,
+  // so composite tools that *return* an access-denied result are tolerated too.
+  if (is403(result)) {
+    throw new Error(`forbidden — missing permission: ${result.content?.[0]?.text || ''}`);
+  }
   assert(result && result.content, 'result has content');
   assert(result.content.length > 0, 'content is non-empty');
   const text = result.content[0].text;
@@ -67,8 +82,7 @@ function parseResult(result) {
  */
 function is403(result) {
   if (!result?.isError) return false;
-  const text = result.content?.[0]?.text || '';
-  return text.includes('403') || text.includes('access denied') || text.includes('Access Denied');
+  return looksForbidden(result.content?.[0]?.text || '');
 }
 
 /** Check if a result is any error (isError flag or non-JSON text) */
@@ -84,15 +98,10 @@ function isNotFound(err) {
 
 // ── Setup ───────────────────────────────────────────────────────────
 
-const CLIENT_ID = process.env.PERSONIO_CLIENT_ID;
-const CLIENT_SECRET = process.env.PERSONIO_CLIENT_SECRET;
+const name = process.argv[2];
+const { clientId, clientSecret } = loadPersonioCredentials(name);
 
-if (!CLIENT_ID || !CLIENT_SECRET) {
-  console.error('PERSONIO_CLIENT_ID and PERSONIO_CLIENT_SECRET must be set');
-  process.exit(1);
-}
-
-const client = new PersonioClient({ clientId: CLIENT_ID, clientSecret: CLIENT_SECRET });
+const client = new PersonioClient({ clientId, clientSecret });
 
 const employeeH = new EmployeeHandlers(client);
 const attendanceH = new AttendanceHandlers(client);
@@ -132,7 +141,7 @@ await test('healthCheck', async () => {
 
 // ── 2. Employees ────────────────────────────────────────────────────
 
-group('2. Employees');
+group('2. Employees', 'Employees');
 
 await test('listEmployees', async () => {
   const result = await employeeH.handleListEmployees({ limit: 5 });
@@ -187,7 +196,7 @@ if (ids.employeeId) {
 
 // ── 3. Attendance V1 ────────────────────────────────────────────────
 
-group('3. Attendance V1');
+group('3. Attendance V1', 'Attendances (+ Employees for report)');
 
 await test('getAttendanceRecords', async () => {
   const result = await attendanceH.handleGetAttendanceRecords({
@@ -219,7 +228,7 @@ await test('generateAttendanceReport', async () => {
 
 // ── 4. Attendance V2 ────────────────────────────────────────────────
 
-group('4. Attendance V2');
+group('4. Attendance V2', 'Attendances');
 
 await test('getAttendancePeriodsV2', async () => {
   const result = await attendanceV2H.handleGetAttendancePeriodsV2({
@@ -253,7 +262,7 @@ if (ids.attendancePeriodId) {
 
 // ── 5. Absences ─────────────────────────────────────────────────────
 
-group('5. Absences');
+group('5. Absences', 'Absences (+ Employees for stats)');
 
 await test('getAbsences', async () => {
   const result = await absenceH.handleGetAbsences({
@@ -302,7 +311,7 @@ await test('getAbsenceStatistics', async () => {
 
 // ── 6. Analytics ────────────────────────────────────────────────────
 
-group('6. Analytics');
+group('6. Analytics', 'Attendances + Absences + Employees');
 
 await test('getTeamAvailability', async () => {
   const result = await analyticsH.handleGetTeamAvailability({});
@@ -314,7 +323,7 @@ await test('getTeamAvailability', async () => {
 
 // ── 7. Documents ────────────────────────────────────────────────────
 
-group('7. Documents');
+group('7. Documents', 'Documents');
 
 await test('getDocumentCategories', async () => {
   const result = await documentH.handleGetDocumentCategories({});
@@ -339,7 +348,7 @@ if (ids.employeeId) {
 
 // ── 8. Approvals ────────────────────────────────────────────────────
 
-group('8. Approvals');
+group('8. Approvals', 'Attendances + Absences');
 
 await test('getPendingApprovals', async () => {
   const result = await approvalH.handleGetPendingApprovals({});
@@ -378,7 +387,7 @@ await test('getApprovalWorkflowSummary', async () => {
 
 // ── 9. Recruiting ───────────────────────────────────────────────────
 
-group('9. Recruiting');
+group('9. Recruiting', 'Recruiting');
 
 await test('listRecruitingApplications', async () => {
   const result = await recruitingH.handleListRecruitingApplications({ limit: 5 });
@@ -452,6 +461,25 @@ if (ids.applicationId) {
     }
     const data = parseResult(result);
     assert(Array.isArray(data.documents), 'documents is array');
+    if (data.documents.length > 0) {
+      ids.applicationDocumentId = data.documents[0].id;
+    }
+  });
+
+  await test('downloadApplicationDocument', async () => {
+    if (!ids.applicationDocumentId) {
+      console.log('    (no application document available — skipped)');
+      return;
+    }
+    const result = await recruitingH.handleDownloadApplicationDocument({
+      document_id: String(ids.applicationDocumentId),
+    });
+    if (is403(result)) {
+      console.log('    (403 — endpoint reachable, scope missing)');
+      return;
+    }
+    const data = parseResult(result);
+    assert(data.size > 0 && typeof data.content === 'string', 'downloaded content present');
   });
 
   await test('listApplicationStageTransitions', async () => {
@@ -505,7 +533,7 @@ if (ids.jobId) {
 
 // ── 10. Recruiting Filters (Regression) ─────────────────────────────
 
-group('10. Recruiting Filters (Regression)');
+group('10. Recruiting Filters (Regression)', 'Recruiting');
 
 await test('filter by candidate_email', async () => {
   const result = await recruitingH.handleListRecruitingApplications({

@@ -11,7 +11,9 @@ MCP server exposing the Personio HR API as callable tools for Claude/AI assistan
 ```bash
 # Development
 npm run build          # Compile TypeScript → build/
-npm test               # Smoke tests (requires API credentials in .env)
+npm run test:unit      # Offline unit tests (no credentials needed)
+npm run test:e2e       # Live core suites: smoke + auth + application documents (needs .env credentials)
+npm run test:other     # Live niche suites: location export, shoe size (needs .env credentials)
 npm start              # Run compiled server
 npm run inspector      # Run with MCP inspector
 
@@ -65,10 +67,16 @@ test-smoke.mjs                        # Smoke test suite (no framework)
 ## Testing
 
 ### Smoke Tests (`test-smoke.mjs`)
-- **31 tests**, 10 groups, ~15-20s runtime
+- **32 tests**, 10 groups, ~15-20s runtime
 - READ-ONLY: no create/update/delete
-- Runs against live Personio API (needs `PERSONIO_CLIENT_ID` + `PERSONIO_CLIENT_SECRET` in `.env`)
-- Tolerates 403 (scope missing) and 404 (route unavailable) as "pass"
+- Runs against live Personio API. Credentials are resolved by `test-credentials.mjs`:
+  `PERSONIO_CLIENT_ID`/`PERSONIO_CLIENT_SECRET` env vars, a `.env` or `.env.<name>`
+  in the repo root, or `~/.secrets/personio/.env.<name>`. The `<name>` comes from a
+  test's first CLI arg, else `PERSONIO_CREDS_NAME`, else `recruiting` (use the env
+  var for the chained `test:e2e`/`test:other` scripts)
+- Tolerates missing scope (403/`forbidden`) and 404 (route unavailable) — counted
+  as skipped/pass, never a failure, so the suite stays green with partial-scope
+  credentials. Each group header notes the access right(s) it requires.
 - Tests cover all read endpoints including recruiting filter regression tests
 
 ### Known API Behaviors

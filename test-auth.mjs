@@ -3,27 +3,17 @@
 // Test script to verify authentication with Personio API
 // Run this with: node test-auth.mjs
 
-import 'dotenv/config';
 import { PersonioAuth } from './build/auth/personio-auth.js';
 import { PersonioClient } from './build/api/personio-client.js';
+import { loadPersonioCredentials } from './test-credentials.mjs';
+import { looksForbidden } from './test-helpers.mjs';
 
 console.log('🔑 Testing Personio Authentication\n');
 
-const CLIENT_ID = process.env.PERSONIO_CLIENT_ID;
-const CLIENT_SECRET = process.env.PERSONIO_CLIENT_SECRET;
+const name = process.argv[2];
+const { clientId: CLIENT_ID, clientSecret: CLIENT_SECRET } = loadPersonioCredentials(name);
 
-if (!CLIENT_ID || !CLIENT_SECRET) {
-  console.log('❌ Missing environment variables:');
-  console.log('   PERSONIO_CLIENT_ID:', CLIENT_ID ? '✅ Set' : '❌ Missing');
-  console.log('   PERSONIO_CLIENT_SECRET:', CLIENT_SECRET ? '✅ Set (hidden)' : '❌ Missing');
-  console.log('\nPlease set both environment variables and try again.');
-  console.log('\nYou can set them in a .env file:');
-  console.log('PERSONIO_CLIENT_ID=your_client_id');
-  console.log('PERSONIO_CLIENT_SECRET=your_client_secret');
-  process.exit(1);
-}
-
-console.log('✅ Environment variables detected\n');
+console.log('✅ Credentials detected\n');
 
 async function testAuth() {
   // Test V1 Authentication
@@ -91,56 +81,38 @@ async function testAuth() {
   }
 
   console.log('\n📌 Testing API calls with obtained token...');
-  try {
-    const client = new PersonioClient({
-      clientId: CLIENT_ID,
-      clientSecret: CLIENT_SECRET,
-    });
+  const client = new PersonioClient({ clientId: CLIENT_ID, clientSecret: CLIENT_SECRET });
 
-    // Test v1 endpoint
-    console.log('\n   Testing v1 /company/employees endpoint...');
+  // Each probe needs a specific Personio access right (Zugriffsrecht). A 403 here
+  // means auth works but the credential lacks that right — reported as a skip, not
+  // a failure (consistent with the smoke test). Other errors are real failures.
+  const probes = [
+    { label: 'v1 /company/employees', requires: 'Employees (Mitarbeitenden)', call: () => client.getEmployees({ limit: 1 }) },
+    { label: 'v2 /attendance-periods', requires: 'Attendances (Anwesenheiten)', call: () => client.getAttendancePeriodsV2({ limit: 1 }) },
+  ];
+
+  for (const probe of probes) {
+    console.log(`\n   Testing ${probe.label} (requires: ${probe.requires})...`);
     try {
-      const employees = await client.getEmployees({ limit: 1 });
-      console.log('   ✅ V1 API call successful');
-      console.log('   Employees found:', employees.data.length);
+      await probe.call();
+      console.log('   ✅ API call successful');
     } catch (error) {
-      console.log('   ❌ V1 API call failed:', error.message);
-    }
-
-    // Test v2 endpoint
-    console.log('\n   Testing v2 /attendance-periods endpoint...');
-    try {
-      const attendance = await client.getAttendancePeriodsV2({ limit: 1 });
-      console.log('   ✅ V2 API call successful');
-      console.log('   Attendance periods found:', Array.isArray(attendance.data) ? attendance.data.length : 'N/A');
-    } catch (error) {
-      console.log('   ❌ V2 API call failed:', error.message);
-
-      if (error.message.includes('V2 Attendance API access denied')) {
-        console.log('\n   💡 Solution: The authentication works but v2 attendance scope is missing');
-        console.log('      • V1 endpoints are working correctly');
-        console.log('      • Use v1 attendance tools instead of v2');
-        console.log('      • Contact Personio for v2 attendance API access');
+      if (looksForbidden(error.message)) {
+        console.log(`   ○ Skipped — credential lacks the "${probe.requires}" access right (403/forbidden)`);
+      } else {
+        console.log('   ❌ API call failed:', error.message);
       }
     }
-
-  } catch (error) {
-    console.log('❌ API test failed:', error.message);
   }
 }
 
 testAuth().then(() => {
   console.log('\n✅ Authentication test complete!');
   console.log('\n📚 Summary:');
-  console.log('   • If V1 auth works: Your credentials are valid');
-  console.log('   • If V2 OAuth fails: Normal - v2 may not be enabled for your account');
-  console.log('   • If V2 attendance fails: Scope issue - use v1 tools instead');
-  console.log('\n💡 Recommendation: Use the v1 attendance tools which are fully functional');
-  console.log('\n📌 Working v1 tools you can use:');
-  console.log('   • get_attendance_records');
-  console.log('   • get_current_attendance_status');
-  console.log('   • generate_attendance_report');
-  console.log('   • api_health_check');
+  console.log('   • Authentication (token) succeeded → the credentials are valid.');
+  console.log('   • A "○ Skipped" API call means the token is fine but the credential lacks');
+  console.log('     that access right (Zugriffsrecht) — enable it in Personio if you need it.');
+  console.log('   • A "❌ failed" API call is a real error worth investigating.');
 }).catch(error => {
   console.log('\n💥 Test crashed:', error.message);
   process.exit(1);

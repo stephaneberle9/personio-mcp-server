@@ -3,19 +3,14 @@
 // Test script to verify shoe size is now included in employee data
 // Run this with: node test-shoe-size.mjs
 
-import 'dotenv/config';
 import { PersonioClient } from './build/api/personio-client.js';
 import { EmployeeHandlers } from './build/handlers/employee-handlers.js';
+import { loadPersonioCredentials } from './test-credentials.mjs';
+import { looksForbidden } from './test-helpers.mjs';
 
-console.log('🧪 Testing Shoe Size Integration\n');
+console.log('\n🧪 Testing Shoe Size Integration\n');
 
-const CLIENT_ID = process.env.PERSONIO_CLIENT_ID;
-const CLIENT_SECRET = process.env.PERSONIO_CLIENT_SECRET;
-
-if (!CLIENT_ID || !CLIENT_SECRET) {
-  console.log('❌ Missing environment variables');
-  process.exit(1);
-}
+const { clientId: CLIENT_ID, clientSecret: CLIENT_SECRET } = loadPersonioCredentials(process.argv[2]);
 
 async function testShoeSize() {
   try {
@@ -87,6 +82,10 @@ async function testShoeSize() {
     console.log('\n✅ All tests passed!');
 
   } catch (error) {
+    if (looksForbidden(error.message)) {
+      console.log('○ Skipped — credential lacks the "Employees (Mitarbeitenden)" access right (403/forbidden)');
+      return;
+    }
     console.log('❌ Test failed:', error.message);
     if (error.stack) {
       console.log('\nStack trace:', error.stack);

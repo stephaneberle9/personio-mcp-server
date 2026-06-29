@@ -24,8 +24,10 @@
     "inspector": "npx @modelcontextprotocol/inspector build/index.js",
     "start": "node build/index.js",
     "attributes": "node print-attributes.mjs",
-    "test": "node test-smoke.mjs",
-    "test:unit": "node --test test-format-employee.mjs test-attribute-schema.mjs test-pagination.mjs test-scope-hints.mjs"
+    "test": "node -e \"console.log('No default test suite. Run one of: npm run test:unit (offline), npm run test:e2e (live: smoke+auth+documents), npm run test:other (live: location-export, shoe-size)')\"",
+    "test:unit": "node --test test-format-employee.mjs test-attribute-schema.mjs test-pagination.mjs test-scope-hints.mjs",
+    "test:e2e": "node test-smoke.mjs && node test-auth.mjs && node test-application-documents.mjs",
+    "test:other": "node test-location-export.mjs && node test-shoe-size.mjs && node test-shoe-size-discovery.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.27.1",

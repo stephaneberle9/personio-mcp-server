@@ -24,15 +24,15 @@
     default scope list; to test a hypothesis (e.g. "does this credential have
     document access?") pass the candidate scope(s) via -Scope.
 
-    Credentials are loaded from a <Name>.env file under ~/.secrets/personio/, each
+    Credentials are loaded from a .env.<Name> file under ~/.secrets/personio/, each
     containing:
 
         PERSONIO_CLIENT_ID=papi-...
         PERSONIO_CLIENT_SECRET=papi-...
 
 .PARAMETER Name
-    Selects which ~/.secrets/personio/<Name>.env file to load. If omitted and the
-    folder holds exactly one *.env file, that one is used; if it holds several,
+    Selects which ~/.secrets/personio/.env.<Name> file to load. If omitted and the
+    folder holds exactly one .env.* file, that one is used; if it holds several,
     the script lists them and prompts you to pick one by number.
 
 .PARAMETER Scope
@@ -91,18 +91,19 @@ if (-not (Test-Path -LiteralPath $secretsDir)) {
     exit 1
 }
 
-# Resolve which <Name>.env file to load.
+# Resolve which .env.<Name> file to load. The .env.* convention keeps these
+# credential files covered by the .env* .gitignore rule.
 if ($Name) {
-    $envFile = Join-Path $secretsDir "$Name.env"
+    $envFile = Join-Path $secretsDir ".env.$Name"
     if (-not (Test-Path -LiteralPath $envFile)) {
         Write-Error "Env file not found: $envFile"
         exit 1
     }
 }
 else {
-    $candidates = @(Get-ChildItem -LiteralPath $secretsDir -Filter '*.env' -File)
+    $candidates = @(Get-ChildItem -LiteralPath $secretsDir -Filter '.env.*' -File -Force)
     if ($candidates.Count -eq 0) {
-        Write-Error "No *.env files found in $secretsDir. Create one (e.g. acme.env) with PERSONIO_CLIENT_ID / PERSONIO_CLIENT_SECRET."
+        Write-Error "No .env.* files found in $secretsDir. Create one (e.g. .env.acme) with PERSONIO_CLIENT_ID / PERSONIO_CLIENT_SECRET."
         exit 1
     }
     if ($candidates.Count -eq 1) {
@@ -111,7 +112,8 @@ else {
     else {
         Write-Host "Multiple credential sets found in ${secretsDir}:" -ForegroundColor Yellow
         for ($i = 0; $i -lt $candidates.Count; $i++) {
-            Write-Host ("  [{0}] {1}" -f ($i + 1), $candidates[$i].BaseName)
+            # Display the logical name (strip the ".env." prefix from ".env.<name>").
+            Write-Host ("  [{0}] {1}" -f ($i + 1), $candidates[$i].Name.Substring('.env.'.Length))
         }
 
         $selection = $null

@@ -406,9 +406,25 @@ npm run build
 
 ### Testing
 
+Test suites are split by whether they need live Personio credentials:
+
 ```bash
-npm test
+npm run test:unit                          # offline unit tests (no credentials needed)
+npm run test:e2e                           # live core suites: smoke + auth + application documents
+npm run test:other                         # live niche suites: location export, shoe size
+
+# Target a non-default credential set (resolves .env.<name> / ~/.secrets/personio/.env.<name>):
+node test-application-documents.mjs finance     # single test: first CLI arg
+PERSONIO_CREDS_NAME=finance npm run test:e2e    # grouped scripts: env var (applies to all)
 ```
+
+The live suites resolve credentials in this order: `PERSONIO_CLIENT_ID` /
+`PERSONIO_CLIENT_SECRET` environment variables, a `.env` or `.env.<name>` file in
+the project root, then `~/.secrets/personio/.env.<name>`. The `<name>` comes from a
+test's first CLI arg, else the `PERSONIO_CREDS_NAME` env var, else `recruiting` — use
+`PERSONIO_CREDS_NAME` for the grouped `test:e2e`/`test:other` scripts, where a CLI arg
+would only reach the last command. Running `npm test` with no suffix just prints the
+list of suites.
 
 ### Testing Location Export Features
 
