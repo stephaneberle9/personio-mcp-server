@@ -74,7 +74,10 @@ param(
         'personio:jobs:read',
         'personio:salary-bands:read',
         'personio:webhooks:read',
-        'personio:webhooks:write'
+        'personio:webhooks:write',
+        # Document Management API scopes are NOT personio:-prefixed (unlike the rest).
+        'documents:read',
+        'documents:write'
     ),
     [string]$BaseUrl = 'https://api.personio.de'
 )
